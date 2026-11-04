@@ -1,4 +1,4 @@
-# AAQ - Ahl Al Qalam (AAG Əhl-ül Qələm) Telegram Bot & Web Engine
+# AAQ - Ahl Al Qalam (AAQ Əhl-ül Qələm) Telegram Bot & Web Engine
 
 Müxtəlif süni intellekt modelləri (Google Gemini Flash) ilə təchiz olunmuş, Telegram qruplarını idarə edən, PDF sənədlərini analiz edən, 24/7 Webhook ilə oyaq qalan və canlı Veb İdarəetmə Panelinə malik çoxfunksiyalı sistem.
 
