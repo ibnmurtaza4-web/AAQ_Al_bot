@@ -186,11 +186,14 @@ Botun Bütün Funksiyaları və Əmrləri:
 • /roleplay — AI xarakterini dəyişmək
 • /sozlesme — Rəsmi gizlilik və istifadə qaydaları
 
-Əsas Qaydalar:
-1. Əgər istifadəçi səndən "hansı model olduğunu" və ya "kim olduğunu" soruşsa, dəqiq olaraq bildir ki, sən Google Gemini AI-nin "${displayName}" modelisən və "AAQ - Ahl Al Qalam" tərəfindən hazırlanmısan.
-2. Saxta sitat uydurma. Yalnız real tarixi şəxsiyyətlərin sözlərini təqdim et.
-3. Rəhbərlik adlarını şəxsi olaraq açıqlama, yalnız "AAQ Rəhbərliyi" adlandır.
-4. Cavabları səlis, aydın, oxunaqlı və lakonik şəkildə zəngin Azərbaycan dilində ver.
+Əsas Qaydalar və Natiqlik Üslubu:
+1. NİTQ TƏRZİ: Sən klassik elmi, rəsmi və akademik tonda danışan, dahi Azərbaycan alimi, maarifçisi və intellektual araşdırmaçısan.
+2. QƏTİYYƏN SÜNİ ROBOT ŞABLONLARINDAN İSTİFADƏ ETMƏ! "Bir süni intellekt olaraq...", "Bir dil modeli kimi...", "Mənim hisslərim yoxdur", "Əlbəttə, kömək edə bilərəm!", "Mənə istənilən sualı verə bilərsiniz" kimi süni və şablon ifadələr qəti qadağandır.
+3. Danışığın canlı, savadlı, sanballı və zəngin ədəbi Azərbaycan dilində olmalıdır. İzahlarında məntiqi tezis, elmi arqumentasiya, faktik dəqiqlik və analitik nəticə nümayiş etdir.
+4. Əgər istifadəçi səndən "hansı model olduğunu" və ya "kim olduğunu" soruşsa, dəqiq olaraq bildir ki, sən Google Gemini AI-nin "${displayName}" mühərriki ilə çalışan "AAQ - Ahl Al Qalam" elmi köməkçisisən.
+5. Saxta sitat uydurma. Yalnız real tarixi şəxsiyyətlərin sözlərini təqdim et.
+6. Rəhbərlik adlarını şəxsi olaraq açıqlama, yalnız "AAQ Rəhbərliyi" adlandır.
+7. Cavabları aydın abzaslarla, oxunaqlı və səliqəli şəkildə təqdim et.
 `;
 
     let instruction = `${botCapabilities}\n\n${config.systemPrompt}\n\nQaydalar və Gizlilik:\n${config.policyText}`;
@@ -391,6 +394,119 @@ Botun Bütün Funksiyaları və Əmrləri:
     storage.addChatMessage(userId, 'user', userText);
     storage.addChatMessage(userId, 'model', localAnswer);
     return localAnswer;
+  }
+
+  public async generateChatReplyStream(
+    userId: number,
+    userText: string,
+    onProgress: (currentText: string, isFinal: boolean) => Promise<void> | void,
+    customPersona?: string,
+    overrideModel?: string
+  ): Promise<string> {
+    const config = storage.getConfig();
+    const user = storage.getUser(userId);
+
+    const modelInfo = this.resolveModelIdentifier(overrideModel || user?.selectedModel || config.model);
+    const activePersonaId = customPersona || user?.roleplayPersona || config.roleplayMode;
+    const systemInstruction = this.buildSystemInstruction(modelInfo.displayName, activePersonaId);
+
+    // Fast-path for identity/model inquiries (<10ms)
+    if (this.isIdentityQuestion(userText)) {
+      const reply = `🏛️ <b>AAQ - Ahl Al Qalam Elmi Mərkəzi</b>\n\nSiz hazırda <b>AAQ</b> elmi-maarif birliyinin intellektual araşdırma köməkçisi (Aktiv mühərrik: <b>${modelInfo.displayName}</b>) ilə elmi dialoqdasınız.\n\n📢 <b>Rəsmi Kanal:</b> ${OFFICIAL_CHANNEL_URL}\n⚙️ Modeli dəyişmək üçün: <code>/model</code>\n🎭 Xarakteri tənzimləmək üçün: <code>/roleplay</code>\n❓ Bütün əmrlər: <code>/help</code>`;
+      storage.addChatMessage(userId, 'user', userText);
+      storage.addChatMessage(userId, 'model', reply);
+      await onProgress(reply, true);
+      return reply;
+    }
+
+    if (!this.ai) {
+      this.initClient();
+    }
+
+    const client = this.ai;
+    if (!client) {
+      const fallback = `🏛️ <b>AAQ Elmi Köməkçisi:</b> Sualınız qəbul edildi. Sistem aktivdir.\nModel: ${modelInfo.displayName}`;
+      await onProgress(fallback, true);
+      return fallback;
+    }
+
+    const history = storage.getChatHistory(userId);
+    const sanitizedContents = this.buildSanitizedContents(history, userText);
+    const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
+
+    const candidateModels = modelInfo.fallbackCascade.filter(
+      (m, idx, arr) => arr.indexOf(m) === idx
+    );
+
+    // 1. If live search grounding is requested, run search first
+    if (needsSearch) {
+      try {
+        const response = await client.models.generateContent({
+          model: candidateModels[0] || 'gemini-3.8-flash',
+          contents: sanitizedContents,
+          config: {
+            systemInstruction,
+            temperature: config.temperature ?? 0.4,
+            tools: [{ googleSearch: {} }]
+          }
+        });
+
+        let replyText = response.text?.trim();
+        if (replyText) {
+          const sources = this.extractGroundingSources(response);
+          if (sources.length > 0) {
+            replyText += `\n\n🌐 <b>Araşdırılan Mənbələr və Keçidlər:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
+          }
+          storage.addChatMessage(userId, 'user', userText);
+          storage.addChatMessage(userId, 'model', replyText);
+          await onProgress(replyText, true);
+          return replyText;
+        }
+      } catch (searchErr: any) {
+        storage.addLog('gemini', `Axtarış xətası (${candidateModels[0]}): ${searchErr?.message || searchErr}. Canlı yazı axınına keçilir.`);
+      }
+    }
+
+    // 2. Real-time streaming generation
+    for (const targetModel of candidateModels) {
+      try {
+        const responseStream = await client.models.generateContentStream({
+          model: targetModel,
+          contents: sanitizedContents,
+          config: {
+            systemInstruction,
+            temperature: config.temperature ?? 0.4
+          }
+        });
+
+        let accumulatedText = '';
+        for await (const chunk of responseStream) {
+          const chunkText = chunk.text;
+          if (chunkText) {
+            accumulatedText += chunkText;
+            await onProgress(accumulatedText, false);
+          }
+        }
+
+        const finalText = accumulatedText.trim();
+        if (finalText) {
+          storage.addChatMessage(userId, 'user', userText);
+          storage.addChatMessage(userId, 'model', finalText);
+          await onProgress(finalText, true);
+          return finalText;
+        }
+      } catch (streamErr: any) {
+        storage.addLog(
+          'gemini',
+          `Model (${targetModel}) canlı axın cəhdi xətası: ${streamErr?.message || streamErr}. Kaskad davam edir.`
+        );
+      }
+    }
+
+    // 3. Fallback to standard generateChatReply if stream encountered issues
+    const fallbackReply = await this.generateChatReply(userId, userText, customPersona, overrideModel);
+    await onProgress(fallbackReply, true);
+    return fallbackReply;
   }
 
   public async quickPrompt(

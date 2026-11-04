@@ -1294,45 +1294,125 @@ export class TelegramBotService {
     );
   }
 
-  // --- ULTRA-FAST DIRECT AI REPLY (ZERO ARTIFICIAL DELAYS) ---
+  // --- REAL-TIME PROGRESSIVE HUMAN-LIKE TYPING STREAM ---
   public async streamAiReplyWithLiveStatus(chatId: number, userId: number, promptText: string) {
-    // 1. Immediately indicate typing in Telegram so user sees the bot is working
-    await this.sendChatAction(chatId, 'typing');
+    // 1. Immediately indicate typing in Telegram header
+    await this.sendChatAction(chatId, 'typing').catch(() => {});
 
-    // 2. Keep typing heartbeat every 3.5s so status doesn't drop while waiting
+    // 2. Keep typing heartbeat active while preparing
     let isDone = false;
     const typingHeartbeat = setInterval(() => {
       if (isDone) return;
       this.sendChatAction(chatId, 'typing').catch(() => {});
-    }, 3500);
+    }, 3000);
+
+    // 3. Send initial message with animated human-like typing placeholder
+    let initialMsg: any = null;
+    try {
+      initialMsg = await this.sendSafeHtml(
+        chatId,
+        `✍️ <i>AAQ Alim qələmə alır...</i> ▌`
+      );
+    } catch {
+      // ignore
+    }
+
+    const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+    const webAppBtn = appUrl.startsWith('https://')
+      ? [{ text: '🌐 İnteraktiv Veb Panel', web_app: { url: appUrl } }]
+      : [];
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔵 Yeni Sual Ver', callback_data: 'nav_ai_chat' },
+          { text: '🟣 Modeli Dəyiş', callback_data: 'menu_models' }
+        ],
+        [
+          { text: '🟢 İzahlı Lüğət', callback_data: 'cmd_sozluk' },
+          { text: '📜 Müdrik Hikmət', callback_data: 'cmd_sitat' }
+        ],
+        ...(webAppBtn.length > 0 ? [webAppBtn] : []),
+        [
+          { text: '📢 AAQ Rəsmi Kanalı', url: OFFICIAL_CHANNEL_URL }
+        ]
+      ]
+    };
+
+    let lastEditTime = 0;
+    const EDIT_INTERVAL_MS = 950; // Respect Telegram's rate limit of ~1 edit/sec per message
+    let lastRenderedText = '';
 
     try {
-      const reply = await geminiService.generateChatReply(userId, promptText);
+      const finalReply = await geminiService.generateChatReplyStream(
+        userId,
+        promptText,
+        async (currentText: string, isFinal: boolean) => {
+          if (!initialMsg || !initialMsg.message_id) return;
+          const now = Date.now();
+
+          if (isFinal) {
+            // Final render: remove cursor, apply full formatting and interactive keyboard
+            try {
+              await this.apiCall('editMessageText', {
+                chat_id: chatId,
+                message_id: initialMsg.message_id,
+                text: currentText,
+                parse_mode: 'HTML',
+                reply_markup: keyboard
+              });
+            } catch (err: any) {
+              if (!err?.message?.includes('message is not modified')) {
+                await this.sendSafeHtml(chatId, currentText, { reply_markup: keyboard }).catch(() => {});
+              }
+            }
+          } else {
+            // Progressive render with typing cursor ▌
+            if (now - lastEditTime >= EDIT_INTERVAL_MS && currentText !== lastRenderedText && currentText.length > 15) {
+              lastEditTime = now;
+              lastRenderedText = currentText;
+              try {
+                await this.apiCall('editMessageText', {
+                  chat_id: chatId,
+                  message_id: initialMsg.message_id,
+                  text: `${currentText} ▌`,
+                  parse_mode: 'HTML'
+                });
+              } catch {
+                try {
+                  // Fallback for unclosed HTML tags during in-progress stream
+                  await this.apiCall('editMessageText', {
+                    chat_id: chatId,
+                    message_id: initialMsg.message_id,
+                    text: `${currentText.replace(/<[^>]*>/g, '')} ▌`
+                  });
+                } catch {
+                  // ignore transient edit collision
+                }
+              }
+            }
+          }
+        }
+      );
+
       isDone = true;
       clearInterval(typingHeartbeat);
-
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '💡 Yeni Sual Ver', callback_data: 'nav_ai_chat' },
-            { text: '🤖 Modeli Dəyiş', callback_data: 'menu_models' }
-          ],
-          [
-            { text: '📜 Müdrik Sitat', callback_data: 'cmd_sitat' },
-            { text: '📢 AAQ Kanalı', url: OFFICIAL_CHANNEL_URL }
-          ]
-        ]
-      };
-
-      // Deliver the finished reply directly without message-edit latency or 429 errors
-      await this.sendSafeHtml(chatId, reply, { reply_markup: keyboard });
+      return finalReply;
     } catch (err: any) {
       isDone = true;
       clearInterval(typingHeartbeat);
-      await this.sendSafeHtml(
-        chatId,
-        `⚠️ Cavab hazırlanarkən xəta baş verdi. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.`
-      );
+      if (initialMsg && initialMsg.message_id) {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: initialMsg.message_id,
+          text: `⚠️ Cavab hazırlanarkən xəta baş verdi. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.`
+        }).catch(() => {});
+      } else {
+        await this.sendSafeHtml(
+          chatId,
+          `⚠️ Cavab hazırlanarkən xəta baş verdi. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.`
+        );
+      }
     }
   }
 
@@ -1474,31 +1554,37 @@ export class TelegramBotService {
 
 Aşağıdakı bölmələrdən modeli dəyişə və ya əmrlərdən dərhal istifadə edə bilərsiniz:`;
 
+    const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+    const webAppRow = appUrl.startsWith('https://')
+      ? [[{ text: '🌐 İnteraktiv Veb Panel (Mini App)', web_app: { url: appUrl } }]]
+      : [];
+
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '🤖 Modeli Dəyiş ⚙️', callback_data: 'menu_models' },
-          { text: '🎭 AI Xarakteri', callback_data: 'menu_roleplay' }
+          { text: '🔵 Sual Ver (/sorus)', callback_data: 'nav_ai_chat' },
+          { text: '🟣 Modeli Dəyiş ⚙️', callback_data: 'menu_models' }
         ],
         [
-          { text: '📚 DİM Bələdçisi', callback_data: 'cmd_dim' },
-          { text: '📜 Müdrik Sitat', callback_data: 'cmd_sitat' }
+          { text: '🟢 DİM Bələdçisi', callback_data: 'cmd_dim' },
+          { text: '📘 İzahlı Lüğət', callback_data: 'cmd_sozluk' }
         ],
         [
-          { text: '📖 İzahlı Lüğət', callback_data: 'cmd_sozluk' },
+          { text: '📜 Müdrik Sitat', callback_data: 'cmd_sitat' },
+          { text: '🏛️ Tarixdə Bu Gün', callback_data: 'cmd_tarix' }
+        ],
+        [
+          { text: '🎭 AI Xarakteri', callback_data: 'menu_roleplay' },
           { text: '🔢 Riyazi Hesabla', callback_data: 'cmd_hesabla' }
         ],
         [
           { text: '🌤️ Canlı Hava', callback_data: 'cmd_hava' },
           { text: '💡 Elmi Fakt', callback_data: 'cmd_fakt' }
         ],
+        ...webAppRow,
         [
-          { text: '📄 Gizlilik Sözləşməsi', callback_data: 'cmd_policy' },
+          { text: '📢 AAQ Rəsmi Kanalı', url: OFFICIAL_CHANNEL_URL },
           { text: '📞 Rəhbərliyə Müraciət', callback_data: 'menu_contact' }
-        ],
-        [
-          { text: '📢 AAQ Kanalı', url: OFFICIAL_CHANNEL_URL },
-          { text: '❓ Bütün Əmrlər', callback_data: 'nav_help' }
         ]
       ]
     };
@@ -1538,15 +1624,19 @@ Aşağıdakı bölmələrdən modeli dəyişə və ya əmrlərdən dərhal istif
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '🤖 Modeli Seç', callback_data: 'menu_models' },
-          { text: '📚 DİM Bələdçisi', callback_data: 'cmd_dim' }
+          { text: '🔵 Sual Ver (/sorus)', callback_data: 'nav_ai_chat' },
+          { text: '🟣 Modeli Seç', callback_data: 'menu_models' }
+        ],
+        [
+          { text: '🟢 DİM Bələdçisi', callback_data: 'cmd_dim' },
+          { text: '📘 İzahlı Lüğət', callback_data: 'cmd_sozluk' }
         ],
         [
           { text: '📜 Müdrik Sitat', callback_data: 'cmd_sitat' },
-          { text: '💡 Fakt Al', callback_data: 'cmd_fakt' }
+          { text: '💡 Elmi Fakt', callback_data: 'cmd_fakt' }
         ],
         [
-          { text: '📢 Rəsmi Kanal', url: OFFICIAL_CHANNEL_URL },
+          { text: '📢 AAQ Rəsmi Kanalı', url: OFFICIAL_CHANNEL_URL },
           { text: '🏠 Əsas Menyu', callback_data: 'nav_main_menu' }
         ]
       ]

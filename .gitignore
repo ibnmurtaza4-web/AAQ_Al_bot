@@ -10,3 +10,4 @@ coverage/
 *.bot_token
 data/
 *.local
+.aistudio/
