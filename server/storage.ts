@@ -189,10 +189,10 @@ export const REAL_HISTORICAL_QUOTES = [
 
 const DEFAULT_CONFIG: BotConfig = {
   botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-  ownerUsername: 'muntazir_admin',
+  ownerUsername: process.env.OWNER_USERNAME || 'aaq_admin',
   officialChannel: OFFICIAL_CHANNEL_URL,
-  adminSecretKey: 'aaq2026admin',
-  adminIds: [6737477904, 746816174],
+  adminSecretKey: process.env.ADMIN_SECRET_KEY || 'admin_secret_key',
+  adminIds: [],
   model: 'gemini-3.8-flash',
   temperature: 0.5,
   systemPrompt: `Sən "AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm) elmi-maarif birliyi tərəfindən idarə olunan Google Gemini AI intellektual köməkçisisən. Rəsmi kanal: https://t.me/AAQ_Offical.
@@ -211,8 +211,8 @@ const DEFAULT_CONFIG: BotConfig = {
   antiProfanity: true,
   antiLink: true,
   antiSpam: true,
-  pollingEnabled: false,
-  connectionMode: 'webhook',
+  pollingEnabled: true,
+  connectionMode: 'polling',
   webhookUrl: '',
   fastAiMode: true
 };
@@ -358,18 +358,16 @@ export class StorageService {
   }
 
   public getOwnerUsername(): string {
-    return this.config.ownerUsername || 'muntazir_admin';
+    return this.config.ownerUsername || process.env.OWNER_USERNAME || 'aaq_admin';
   }
 
   public getAdminIds(): number[] {
     const ids = new Set<number>(this.config.adminIds || []);
-    ids.add(6737477904);
-    ids.add(746816174);
-    const ownerName = (this.config.ownerUsername || 'muntazir_admin').replace(/^@/, '').trim().toLowerCase();
+    const ownerName = this.getOwnerUsername().replace(/^@/, '').trim().toLowerCase();
     for (const u of this.users.values()) {
       if (u.username) {
         const uName = u.username.replace(/^@/, '').trim().toLowerCase();
-        if (uName === ownerName || uName === 'muntazir_admin') {
+        if (uName && uName === ownerName) {
           ids.add(u.id);
         }
       }
@@ -396,15 +394,17 @@ export class StorageService {
     if (!from) return false;
     const username = (from.username || '').replace(/^@/, '').trim().toLowerCase();
     const ownerName = this.getOwnerUsername().replace(/^@/, '').trim().toLowerCase();
-    if (username && (username === ownerName || username === 'muntazir_admin')) return true;
+    if (ownerName && username === ownerName) return true;
     const uid = Number(from.id);
-    if (uid && (this.config.adminIds.includes(uid) || uid === 6737477904 || uid === 746816174)) return true;
+    if (uid && this.config.adminIds.includes(uid)) return true;
     return false;
   }
 
   public verifyAdminSecret(secret: string): boolean {
     if (!secret) return false;
-    return secret.trim() === (this.config.adminSecretKey || 'aaq2026admin').trim();
+    const validSecret = (this.config.adminSecretKey || process.env.ADMIN_SECRET_KEY || '').trim();
+    if (!validSecret) return false;
+    return secret.trim() === validSecret;
   }
 
   public registerOrUpdateUser(userData: {

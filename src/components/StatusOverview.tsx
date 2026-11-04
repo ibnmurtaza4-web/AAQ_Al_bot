@@ -54,7 +54,7 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
   const [tokenInput, setTokenInput] = useState(() => {
     return config?.botToken || (typeof window !== 'undefined' ? localStorage.getItem(LOCAL_TOKEN_KEY) || '' : '');
   });
-  const [ownerInput, setOwnerInput] = useState(config?.ownerUsername || 'muntazir_admin');
+  const [ownerInput, setOwnerInput] = useState(config?.ownerUsername || '');
   const [adminInput, setAdminInput] = useState('');
   const [webhookInput, setWebhookInput] = useState(status?.webhookUrl || '');
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -639,7 +639,7 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
                   type="text"
                   value={ownerInput}
                   onChange={(e) => setOwnerInput(e.target.value)}
-                  placeholder="muntazir_admin"
+                  placeholder="admin_username"
                   className="w-full pl-8 pr-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
                 />
               </div>

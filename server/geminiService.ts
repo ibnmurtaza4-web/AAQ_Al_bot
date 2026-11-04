@@ -306,14 +306,16 @@ Botun Bütün Funksiyaları və Əmrləri:
     const sanitizedContents = this.buildSanitizedContents(history, userText);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
 
-    // Primary target model first, then at most one fallback model
-    const candidateModels = [modelInfo.sdkModel, modelInfo.fallbackCascade[1] || 'gemini-3.7-flash'].filter(
+    // Use cascade so that if one model experiences 503 spike or 429 quota, others answer immediately
+    const candidateModels = modelInfo.fallbackCascade.filter(
       (m, idx, arr) => arr.indexOf(m) === idx
     );
 
+    let didAttemptSearch = false;
     for (const targetModel of candidateModels) {
-      // 1. If real-time info is asked, try search grounding
-      if (needsSearch) {
+      // 1. If real-time info is asked, try search grounding on the primary model
+      if (needsSearch && !didAttemptSearch) {
+        didAttemptSearch = true;
         try {
           const response = await client.models.generateContent({
             model: targetModel,

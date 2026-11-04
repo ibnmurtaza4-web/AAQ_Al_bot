@@ -379,9 +379,19 @@ export class TelegramBotService {
     }
   }
 
+  private isLoopRunning = false;
+
   public async startPolling(): Promise<{ success: boolean; botInfo?: BotIdentity; message: string }> {
     if (!this.token) {
       return { success: false, message: 'Telegram Bot Token daxil edilməyib.' };
+    }
+
+    if (this.isPolling && !this.shouldStop && this.isLoopRunning) {
+      return {
+        success: true,
+        botInfo: this.botIdentity.id ? this.botIdentity : undefined,
+        message: 'Bot onsuz da aktiv polling rejimində işləyir.'
+      };
     }
 
     try {
@@ -393,7 +403,7 @@ export class TelegramBotService {
       this.isPolling = true;
       this.shouldStop = false;
       this.pollingErrorCount = 0;
-      storage.updateConfig({ pollingEnabled: true });
+      storage.updateConfig({ pollingEnabled: true, connectionMode: 'polling' });
 
       storage.addLog(
         'telegram',
@@ -409,6 +419,7 @@ export class TelegramBotService {
       };
     } catch (err: any) {
       this.isPolling = false;
+      this.isLoopRunning = false;
       storage.updateConfig({ pollingEnabled: false });
       storage.addLog('error', `Bot işə düşmədi: ${err?.message || err}`);
       return { success: false, message: `Xəta: ${err?.message || err}` };
@@ -418,6 +429,7 @@ export class TelegramBotService {
   public async stopPolling(): Promise<{ success: boolean; message: string }> {
     this.shouldStop = true;
     this.isPolling = false;
+    this.isLoopRunning = false;
     storage.updateConfig({ pollingEnabled: false });
     storage.addLog('telegram', '🛑 Telegram bot polling dayandırıldı.');
     return { success: true, message: 'Bot dayandırıldı.' };
@@ -513,38 +525,46 @@ export class TelegramBotService {
   }
 
   private async pollLoop() {
-    while (this.isPolling && !this.shouldStop) {
-      try {
-        const updates = await this.apiCall('getUpdates', {
-          offset: this.lastUpdateId + 1,
-          timeout: 20,
-          allowed_updates: ['message', 'callback_query', 'inline_query']
-        });
+    if (this.isLoopRunning) {
+      return;
+    }
+    this.isLoopRunning = true;
+    try {
+      while (this.isPolling && !this.shouldStop) {
+        try {
+          const updates = await this.apiCall('getUpdates', {
+            offset: this.lastUpdateId + 1,
+            timeout: 20,
+            allowed_updates: ['message', 'callback_query', 'inline_query']
+          });
 
-        this.pollingErrorCount = 0;
+          this.pollingErrorCount = 0;
 
-        if (Array.isArray(updates) && updates.length > 0) {
-          for (const update of updates) {
-            this.lastUpdateId = update.update_id;
-            this.processUpdate(update).catch(err => {
-              storage.addLog('error', `Update emal xətası (ID: ${update.update_id}): ${err?.message || err}`);
-            });
+          if (Array.isArray(updates) && updates.length > 0) {
+            for (const update of updates) {
+              this.lastUpdateId = update.update_id;
+              this.processUpdate(update).catch(err => {
+                storage.addLog('error', `Update emal xətası (ID: ${update.update_id}): ${err?.message || err}`);
+              });
+            }
           }
-        }
-      } catch (err: any) {
-        this.pollingErrorCount++;
-        const errMsg = err?.message || String(err);
-        if (errMsg.includes('409') || errMsg.includes('Conflict')) {
-          storage.addLog('error', '⚠️ Telegram 409 Conflict: Eyni token başqa yerdə də işləyir.');
-          await new Promise(r => setTimeout(r, 5000));
-        } else {
-          if (this.pollingErrorCount % 5 === 0) {
-            storage.addLog('error', `Polling xətası: ${errMsg}`);
+        } catch (err: any) {
+          this.pollingErrorCount++;
+          const errMsg = err?.message || String(err);
+          if (errMsg.includes('409') || errMsg.includes('Conflict')) {
+            storage.addLog('error', '⚠️ Telegram 409 Conflict: Eyni token başqa yerdə də işləyir.');
+            await new Promise(r => setTimeout(r, 5000));
+          } else {
+            if (this.pollingErrorCount % 5 === 0) {
+              storage.addLog('error', `Polling xətası: ${errMsg}`);
+            }
+            const backoff = Math.min(10000, 1000 * this.pollingErrorCount);
+            await new Promise(r => setTimeout(r, backoff));
           }
-          const backoff = Math.min(10000, 1000 * this.pollingErrorCount);
-          await new Promise(r => setTimeout(r, backoff));
         }
       }
+    } finally {
+      this.isLoopRunning = false;
     }
   }
 
@@ -959,14 +979,14 @@ export class TelegramBotService {
           case 'admin': {
             const secret = text.replace(/^\/admin\s*/i, '').trim();
             const adminIds = storage.getAdminIds();
-            if (secret === 'aaq2026admin' || secret === 'aaq' || secret === 'admin' || storage.verifyAdminSecret(secret) || adminIds.length === 0) {
+            if (storage.verifyAdminSecret(secret) || adminIds.length === 0) {
               storage.addAdminId(userId);
               await this.sendSafeHtml(chatId, `👑 <b>Təbriklər!</b> Siz rəsmi <b>AAQ Admin</b> statusu qazandınız.\nChat ID-niz: <code>${userId}</code> rəsmi idarəçi kimi təsdiqləndi.`);
               await this.handleOwnerPanel(chatId);
             } else if (this.isOwner(msg.from)) {
               await this.handleOwnerPanel(chatId);
             } else {
-              await this.sendSafeHtml(chatId, '🔒 <b>Admin Girişi</b>\nİstifadə: <code>/admin aaq2026admin</code>');
+              await this.sendSafeHtml(chatId, '🔒 <b>Admin Girişi</b>\nİstifadə: <code>/admin [gizli_şifrə]</code>\n<i>Qeyd: Admin şifrəsi idarə panelində təyin olunur.</i>');
             }
             return;
           }

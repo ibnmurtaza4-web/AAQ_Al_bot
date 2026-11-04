@@ -40,11 +40,11 @@ Bu layihədə bütün gizli açarlar koddan tam təcrid edilib. Reponun və ya s
 
 | Dəyişən Adı | İzah | Nümunə Dəyər |
 | :--- | :--- | :--- |
-| `BOT_TOKEN` | Telegram BotFather tokeni | `8005698770:AAHz4...` |
+| `BOT_TOKEN` | Telegram BotFather tokeni | `1234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `GEMINI_API_KEY` | Google Gemini AI Model Açarı | `AIzaSy...` |
-| `ADMIN_SECRET_KEY`| AAQ İdarə Paneli və Admin Parolu | `aaq2026admin` |
+| `ADMIN_SECRET_KEY`| AAQ İdarə Paneli və Admin Parolu | `your_secret_admin_key` |
 | `APP_URL` | Serverin canlı HTTPS ünvanı (Webhook üçün) | `https://your-domain.run.app` |
-| `OWNER_USERNAME` | Baş Rəhbərin Telegram istifadəçi adı | `muntazir_admin` |
+| `OWNER_USERNAME` | Baş Rəhbərin Telegram istifadəçi adı | `your_telegram_username` |
 | `PORT` | Daxili server portu | `3000` |
 
 ---

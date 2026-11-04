@@ -99,7 +99,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({
   };
 
   const handleCopySecretKey = () => {
-    const key = config?.adminSecretKey || 'aaq2026admin';
+    const key = config?.adminSecretKey || 'admin_secret';
     navigator.clipboard.writeText(`/admin ${key}`);
     setCopiedKey(true);
     setTimeout(() => setCopiedKey(false), 2000);
@@ -282,12 +282,12 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({
           </div>
 
           <p className="text-xs text-slate-400 leading-relaxed">
-            Telegram-da bota <code>/admin {config?.adminSecretKey || 'aaq2026admin'}</code> yazaraq dərhal öz hesabınızı rəsmi admin kimi qeydiyyatdan keçirə bilərsiniz.
+            Telegram-da bota <code>/admin {config?.adminSecretKey || 'admin_secret'}</code> yazaraq dərhal öz hesabınızı rəsmi admin kimi qeydiyyatdan keçirə bilərsiniz.
           </p>
 
           <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
             <div className="font-mono text-xs text-cyan-300">
-              /admin {config?.adminSecretKey || 'aaq2026admin'}
+              /admin {config?.adminSecretKey || 'admin_secret'}
             </div>
             <button
               onClick={handleCopySecretKey}
