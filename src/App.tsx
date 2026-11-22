@@ -390,7 +390,6 @@ export default function App() {
             config={config}
             personas={personas}
             models={models}
-            providerKeys={status?.providerKeys}
             onUpdateConfig={handleUpdateConfig}
             isLoading={isLoading}
           />

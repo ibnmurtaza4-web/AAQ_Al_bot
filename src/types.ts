@@ -67,8 +67,6 @@ export interface ModelDefinition {
   name: string;
   description: string;
   speed: string;
-  provider?: 'gemini' | 'openrouter' | 'groq';
-  requiresKeyEnv?: string;
   isDefault?: boolean;
 }
 
@@ -113,17 +111,10 @@ export interface BotConfig {
   fastAiMode?: boolean;
 }
 
-export interface ProviderKeysStatus {
-  gemini: boolean;
-  openrouter: boolean;
-  groq: boolean;
-}
-
 export interface AppStatus {
   botRunning: boolean;
   botInfo: BotInfo | null;
   hasGeminiApiKey: boolean;
-  providerKeys?: ProviderKeysStatus;
   selectedModel: string;
   roleplayMode: string;
   totalUsers: number;

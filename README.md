@@ -8,11 +8,9 @@ Rəsmi Təşkilat Kanalı: [t.me/AAQ_Offical](https://t.me/AAQ_Offical)
 
 ## 🌟 Əsas Xüsusiyyətlər
 
-### 1. ⚡ Multi-Model Sürətli Süni İntellekt (Gemini + OpenRouter + Groq)
-- **Google Gemini:** `gemini-3.8-flash` (Defolt), `gemini-2.5-flash`, `gemini-3.1-flash-lite`.
-- **OpenRouter (Pulsuz Açıq Mənbə):** `deepseek/deepseek-r1:free`, `deepseek/deepseek-chat:free` (V3), `meta-llama/llama-3.3-70b-instruct:free`, `qwen/qwen-2.5-72b-instruct:free`.
-- **Groq LPU (İldırım Sürətli Pulsuz):** `llama-3.3-70b-versatile`, `deepseek-r1-distill-llama-70b`.
-- **İtiksiz Kaskad (Auto-Failover):** Hər hansı modeldə 503 yüklənməsi və ya limit yarandıqda sistem dərhal digər aktiv provayderə keçir.
+### 1. ⚡ Sürətli Süni İntellekt (Gemini Flash Engine)
+- **Modellər:** `gemini-3.8-flash` (Defolt), `gemini-2.5-flash`, `gemini-3.7-flash`, `gemini-3.1-flash-lite`, `gemini-flash-latest`.
+- **İtiksiz Kaskad (Auto-Failover):** Hər hansı modeldə 503 yüklənməsi yarandıqda sistem dərhal digər aktiv Gemini Flash modelinə keçir.
 - **Dərin Xarakter İmmersiyası:** Müdrik Filosof, Baş Proqramçı, DİM Eksperti, Kiberpunk 2077, Səmimi Dost və Xarici Dil Müəllimi.
 
 ### 2. 📄 Ağıllı PDF Sənəd Analizi
@@ -39,12 +37,10 @@ Rəsmi Təşkilat Kanalı: [t.me/AAQ_Offical](https://t.me/AAQ_Offical)
 
 Bu layihədə bütün gizli açarlar koddan tam təcrid edilib. Reponun və ya serverinizin mühit dəyişənlərinə (**GitHub Settings → Secrets and variables → Actions** və ya `.env`) aşağıdakı açarları əlavə edin:
 
-| Dəyişən Adı | İzah | Birbaşa Açar Götürmə Linki / Nümunə |
+| Dəyişən Adı | İzah | Nümunə Dəyər |
 | :--- | :--- | :--- |
-| `BOT_TOKEN` | Telegram BotFather tokeni | `@BotFather` (`123456:ABC...`) |
-| `GEMINI_API_KEY` | Google Gemini AI Model Açarı | [Google AI Studio](https://aistudio.google.com/apikey) |
-| `OPENROUTER_API_KEY` | OpenRouter Pulsuz Modellər (DeepSeek R1/V3, Llama, Qwen) | [OpenRouter Keys](https://openrouter.ai/keys) |
-| `GROQ_API_KEY` | Groq Console Ultra-Sürətli LPU Modellər | [Groq Console Keys](https://console.groq.com/keys) |
+| `BOT_TOKEN` | Telegram BotFather tokeni | `1234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
+| `GEMINI_API_KEY` | Google Gemini AI Model Açarı | `AIzaSy...` |
 | `ADMIN_SECRET_KEY`| AAQ İdarə Paneli və Admin Parolu | `your_secret_admin_key` |
 | `APP_URL` | Serverin canlı HTTPS ünvanı (Webhook üçün) | `https://your-domain.run.app` |
 | `OWNER_USERNAME` | Baş Rəhbərin Telegram istifadəçi adı | `your_telegram_username` |

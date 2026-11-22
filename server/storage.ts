@@ -103,8 +103,6 @@ export interface ModelDefinition {
   name: string;
   description: string;
   speed: string;
-  provider: 'gemini' | 'openrouter' | 'groq';
-  requiresKeyEnv: string;
   isDefault?: boolean;
 }
 
@@ -115,8 +113,6 @@ export const AVAILABLE_MODELS: ModelDefinition[] = [
     name: '🔵 Gemini 3.8 Flash ⚡ (Ən Son Nəsil)',
     description: 'Ən yeni bilik bazası, real vaxt təqvim/axtarış anlayışı və sürətli reaksiya',
     speed: 'Ultra Sürətli (~0.3s)',
-    provider: 'gemini',
-    requiresKeyEnv: 'GEMINI_API_KEY',
     isDefault: true
   },
   {
@@ -124,72 +120,28 @@ export const AVAILABLE_MODELS: ModelDefinition[] = [
     alias: 'Gemini 2.5 Flash',
     name: '🔵 Gemini 2.5 Flash ⚡ (Yüksək Sabitlik)',
     description: '503 yüklənmələrinə qarşı ən stabil, etibarlı və səlis Google Flash modeli',
-    speed: 'Sürətli (~0.3s)',
-    provider: 'gemini',
-    requiresKeyEnv: 'GEMINI_API_KEY'
+    speed: 'Sürətli (~0.3s)'
+  },
+  {
+    id: 'gemini-3.7-flash',
+    alias: 'Gemini 3.7 Flash',
+    name: '🟣 Gemini 3.7 Flash 🌟',
+    description: 'Hibrid düşüncə, geniş kontekst və zəngin bilik bazası',
+    speed: 'Sürətli (~0.4s)'
   },
   {
     id: 'gemini-3.1-flash-lite',
     alias: 'Gemini 3.1 Flash Lite',
-    name: '🔵 Gemini 3.1 Flash Lite 🚀',
+    name: '🟢 Gemini 3.1 Flash Lite 🚀',
     description: 'Operativ reaksiya, minimum gecikmə və kəsintisiz iş',
-    speed: 'İldırım Sürəti (~0.2s)',
-    provider: 'gemini',
-    requiresKeyEnv: 'GEMINI_API_KEY'
+    speed: 'İldırım Sürəti (~0.2s)'
   },
   {
-    id: 'deepseek/deepseek-r1:free',
-    alias: 'DeepSeek R1 (Free)',
-    name: '🟣 DeepSeek R1 🧠 (OpenRouter Pulsuz)',
-    description: 'Dərin elmi, fəlsəfi və riyazi mühakimə aparan açıq mənbəli Reasoning modeli',
-    speed: 'Dərin Analiz (~1.5s)',
-    provider: 'openrouter',
-    requiresKeyEnv: 'OPENROUTER_API_KEY'
-  },
-  {
-    id: 'deepseek/deepseek-chat:free',
-    alias: 'DeepSeek V3 (Free)',
-    name: '🟣 DeepSeek V3 🌌 (OpenRouter Pulsuz)',
-    description: '671B parametrli akademik səviyyəli nitq, proqramlaşdırma və elmi izah modeli',
-    speed: 'Sürətli (~0.7s)',
-    provider: 'openrouter',
-    requiresKeyEnv: 'OPENROUTER_API_KEY'
-  },
-  {
-    id: 'meta-llama/llama-3.3-70b-instruct:free',
-    alias: 'Llama 3.3 70B (OpenRouter)',
-    name: '🟣 Llama 3.3 70B 🏛️ (OpenRouter Pulsuz)',
-    description: 'Meta-nın zəngin kontekstli, insan tərzinə yaxın 70B intellektual modeli',
-    speed: 'Sürətli (~0.6s)',
-    provider: 'openrouter',
-    requiresKeyEnv: 'OPENROUTER_API_KEY'
-  },
-  {
-    id: 'qwen/qwen-2.5-72b-instruct:free',
-    alias: 'Qwen 2.5 72B (Free)',
-    name: '🟠 Qwen 2.5 72B 📜 (OpenRouter Pulsuz)',
-    description: 'Azərbaycan və Şərq dillərində yüksək sintaktik dəqiqlik və elmi ifadə gücü',
-    speed: 'Sürətli (~0.7s)',
-    provider: 'openrouter',
-    requiresKeyEnv: 'OPENROUTER_API_KEY'
-  },
-  {
-    id: 'llama-3.3-70b-versatile',
-    alias: 'Groq Llama 3.3 70B',
-    name: '🟢 Groq Llama 3.3 70B ⚡ (LPU Pulsuz)',
-    description: 'Groq LPU mühərriki ilə saniyədə 400+ token sürəti və ani cavab axını',
-    speed: 'LPU İldırım (~0.15s)',
-    provider: 'groq',
-    requiresKeyEnv: 'GROQ_API_KEY'
-  },
-  {
-    id: 'deepseek-r1-distill-llama-70b',
-    alias: 'Groq DeepSeek R1 70B',
-    name: '🟢 Groq DeepSeek R1 70B 🚀 (LPU Pulsuz)',
-    description: 'DeepSeek R1 məntiqi ilə Groq LPU sürətinin birləşməsi (elmi/STEM həllər)',
-    speed: 'LPU Sürətli (~0.25s)',
-    provider: 'groq',
-    requiresKeyEnv: 'GROQ_API_KEY'
+    id: 'gemini-flash-latest',
+    alias: 'Gemini Flash Latest',
+    name: '🟡 Gemini Flash Latest 💡',
+    description: 'Daim yenilənən sabit Flash modeli',
+    speed: 'Sürətli (~0.3s)'
   }
 ];
 

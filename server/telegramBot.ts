@@ -990,7 +990,7 @@ export class TelegramBotService {
           case 'keepalive':
           case 'stats': {
             const ka = keepAliveService.getStatus();
-            const keys = geminiService.getProviderStatus();
+            const hasGemini = geminiService.hasApiKey();
             const uptimeMin = Math.floor(ka.uptimeSeconds / 60);
             const activeUser = storage.getUser(userId);
             const cfg = storage.getConfig();
@@ -1004,11 +1004,8 @@ export class TelegramBotService {
                 `⏱️ <b>Fasiləsiz İş (Uptime):</b> ${uptimeMin} dəqiqə\n` +
                 `💓 <b>Nabız Sayı:</b> ${ka.totalPings} | İnterval: ${ka.intervalMinutes} dəq\n` +
                 `🤖 <b>Aktiv Model:</b> ${modelDef?.name || activeModelId}\n` +
-                `🎭 <b>Aktiv Xarakter:</b> ${activePersona.icon} ${activePersona.name}\n\n` +
-                `🔑 <b>Provayderlər:</b>\n` +
-                `• Google Gemini: ${keys.gemini ? '🟢 Aktiv' : '⚪ Yoxdur'}\n` +
-                `• OpenRouter (DeepSeek/Llama/Qwen): ${keys.openrouter ? '🟢 Aktiv' : '⚪ Təyin edilməyib'}\n` +
-                `• Groq LPU: ${keys.groq ? '🟢 Aktiv' : '⚪ Təyin edilməyib'}`
+                `🎭 <b>Aktiv Xarakter:</b> ${activePersona.icon} ${activePersona.name}\n` +
+                `🔑 <b>Gemini AI:</b> ${hasGemini ? '🟢 Aktiv' : '⚪ Yoxdur'}`
             );
             return;
           }
@@ -2550,40 +2547,28 @@ Artıq botun bütün süni intellekt, elmi və moderasiya imkanlarından yenidə
     const user = storage.getUser(userId);
     const config = storage.getConfig();
     const activeModelId = user?.selectedModel || config.model;
-    const providerKeys = geminiService.getProviderStatus();
 
     const buttons: Array<Array<{ text: string; callback_data?: string; url?: string }>> = AVAILABLE_MODELS.map(m => {
       const isSelected = m.id === activeModelId;
-      const isKeyReady = geminiService.isModelKeyConfigured(m);
-      const statusBadge = isSelected ? '✅ ' : isKeyReady ? '' : '🔑 ';
       return [
         {
-          text: `${statusBadge}${m.name}`,
+          text: `${isSelected ? '✅ ' : ''}${m.name}`,
           callback_data: `select_model_${m.id}`
         }
       ];
     });
 
     buttons.push([
-      { text: '🔗 OpenRouter Açar (Pulsuz)', url: 'https://openrouter.ai/keys' },
-      { text: '🔗 Groq Açar (Pulsuz)', url: 'https://console.groq.com/keys' }
-    ]);
-    buttons.push([
       { text: '📢 AAQ Kanalı', url: OFFICIAL_CHANNEL_URL },
       { text: '🏠 Əsas Menyu', callback_data: 'nav_main_menu' }
     ]);
 
     const activeDef = AVAILABLE_MODELS.find(m => m.id === activeModelId);
-    const text = `🤖 <b>MULTI-MODEL AI MÜHƏRRİK SEÇİMİ</b>
+    const text = `🤖 <b>GEMINI AI MODEL SEÇİMİ</b>
 
 Hazırda aktiv modeliniz: <b>${activeDef?.name || activeModelId}</b>
 
-📊 <b>Provayder Açar Statusu:</b>
-• Google Gemini: ${providerKeys.gemini ? '🟢 Aktivdir' : '⚪ Gözləyir'}
-• OpenRouter (DeepSeek R1/V3, Llama 3.3, Qwen 2.5): ${providerKeys.openrouter ? '🟢 Aktivdir' : '🔑 Açar əlavə edilməyib'}
-• Groq LPU (Llama 3.3, DeepSeek R1 70B): ${providerKeys.groq ? '🟢 Aktivdir' : '🔑 Açar əlavə edilməyib'}
-
-<i>Qeyd: 🔑 nişanlı modellərin açarı təyin edilmədikdə sistem avtomatik olaraq aktiv ehtiyat modelə keçir.</i>`;
+Aşağıdakı modellərdən birini seçərək botun cavabvermə intellektini və sürətini təyin edə bilərsiniz:`;
 
     await this.sendSafeHtml(chatId, text, {
       reply_markup: { inline_keyboard: buttons }
@@ -2733,7 +2718,6 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
         const modelId = data.replace('select_model_', '');
         storage.setUserModel(userId, modelId);
         const def = AVAILABLE_MODELS.find(m => m.id === modelId);
-        const keyReady = def ? geminiService.isModelKeyConfigured(def) : true;
         const navKb = {
           inline_keyboard: [
             [
@@ -2746,15 +2730,9 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
           ]
         };
 
-        let statusNote = '<i>İndi suallarınızı birbaşa bu model ən yüksək sürət və dəqiqliklə cavablandıracaq.</i>';
-        if (def && !keyReady) {
-          const keyUrl = def.provider === 'groq' ? 'https://console.groq.com/keys' : 'https://openrouter.ai/keys';
-          statusNote = `⚠️ <b>Qeyd:</b> <code>${def.requiresKeyEnv}</code> açarı server mühitinə hələ əlavə edilməyib (<a href="${keyUrl}">Buradan pulsuz açar götürün</a>). Açar əlavə olunana qədər bot sorğularınızı avtomatik olaraq aktiv ehtiyat model ilə cavablandıracaq.`;
-        }
-
         await this.sendSafeHtml(
           chatId,
-          `✅ <b>Aktiv AI Modeli Seçildi:</b> ${def?.name || modelId}\n\n${statusNote}`,
+          `✅ <b>Aktiv Gemini Modeli Təyin Edildi:</b> ${def?.name || modelId}\n\n<i>İndi suallarınızı birbaşa bu model ən yüksək sürət və dəqiqliklə cavablandıracaq.</i>`,
           { reply_markup: navKb }
         );
         return;

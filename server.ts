@@ -57,7 +57,6 @@ app.get('/api/status', async (req, res) => {
       botRunning: telegramBot.isRunning(),
       botInfo,
       hasGeminiApiKey: geminiService.hasApiKey(),
-      providerKeys: geminiService.getProviderStatus(),
       selectedModel: config.model,
       roleplayMode: config.roleplayMode,
       totalUsers: users.length,

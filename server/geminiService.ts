@@ -106,12 +106,6 @@ TAM İMMERSİYA QAYDALARI:
   }
 ];
 
-export interface ProviderStatusMap {
-  gemini: boolean;
-  openrouter: boolean;
-  groq: boolean;
-}
-
 export class GeminiService {
   private ai: GoogleGenAI | null = null;
 
@@ -139,21 +133,6 @@ export class GeminiService {
     return !!(process.env.GEMINI_API_KEY || '').trim();
   }
 
-  public getProviderStatus(): ProviderStatusMap {
-    return {
-      gemini: !!(process.env.GEMINI_API_KEY || '').trim(),
-      openrouter: !!(process.env.OPENROUTER_API_KEY || '').trim(),
-      groq: !!(process.env.GROQ_API_KEY || '').trim()
-    };
-  }
-
-  public isModelKeyConfigured(modelDef: ModelDefinition): boolean {
-    const status = this.getProviderStatus();
-    if (modelDef.provider === 'openrouter') return status.openrouter;
-    if (modelDef.provider === 'groq') return status.groq;
-    return status.gemini;
-  }
-
   public getPersona(personaId?: string): PersonaOption {
     return ROLEPLAY_PERSONAS.find(p => p.id === personaId) || ROLEPLAY_PERSONAS[0];
   }
@@ -170,36 +149,19 @@ export class GeminiService {
         m => m.id === modelKey || m.alias.toLowerCase() === modelKey.toLowerCase()
       ) || AVAILABLE_MODELS[0];
 
-    const status = this.getProviderStatus();
-
-    // Build an intelligent failover cascade across all configured providers:
-    // 1. User's selected model (if key exists)
-    // 2. High-reliability Gemini models (2.5 Flash, 3.8 Flash, 3.1 Lite)
-    // 3. Groq LPU (if GROQ_API_KEY configured)
-    // 4. OpenRouter free models (if OPENROUTER_API_KEY configured)
     const preferredOrderIds = [
       matched.id,
       'gemini-2.5-flash',
       'gemini-3.8-flash',
+      'gemini-3.7-flash',
       'gemini-3.1-flash-lite',
-      'llama-3.3-70b-versatile',
-      'deepseek/deepseek-chat:free',
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'qwen/qwen-2.5-72b-instruct:free',
-      'deepseek/deepseek-r1:free',
-      'deepseek-r1-distill-llama-70b'
+      'gemini-flash-latest'
     ];
 
     const uniqueIds = preferredOrderIds.filter((id, idx, arr) => arr.indexOf(id) === idx);
-    const cascade: ModelDefinition[] = [];
-
-    for (const id of uniqueIds) {
-      const def = AVAILABLE_MODELS.find(m => m.id === id);
-      if (!def) continue;
-      if (def.provider === 'gemini' && status.gemini) cascade.push(def);
-      else if (def.provider === 'groq' && status.groq) cascade.push(def);
-      else if (def.provider === 'openrouter' && status.openrouter) cascade.push(def);
-    }
+    const cascade: ModelDefinition[] = uniqueIds
+      .map(id => AVAILABLE_MODELS.find(m => m.id === id))
+      .filter((m): m is ModelDefinition => Boolean(m));
 
     return { primary: matched, cascade };
   }
@@ -251,7 +213,6 @@ MÜTLƏQ ANTİ-ROBOT QADAĞALARI:
 4. Bot əmrləri: /sorus, /sozluk, /hesabla, /hava, /sitat, /tarix, /dim, /pdf, /quiz, /tercume, /xulas, /elaqe, /model, /roleplay, /clear.
 `;
 
-    // If a specific persona is active, let THAT persona's tone/style completely dominate!
     if (persona.id !== 'default') {
       return `=== [MÜTLƏQ ROL İMMERSİYASI: ${persona.icon} ${persona.name.toUpperCase()}] ===
 Sən hazırda 100% "${persona.name}" xarakterindəsən. İstifadəçi bu xarakteri xüsusi olaraq seçib və sənin HƏR CÜMLƏNDƏ bu rolun nəfəsini, üslubunu və düşüncə tərzini hiss etməlidir!
@@ -265,7 +226,6 @@ ${temporalAndOrgContext}
 ${config.policyText}`;
     }
 
-    // Default AAQ Academic Persona
     return `=== [AAQ ELM VƏ MAARİF KÖMƏKÇİSİ] ===
 ${persona.prompt}
 
@@ -318,33 +278,6 @@ ${config.policyText}`;
     return contents;
   }
 
-  private buildOpenAiMessages(
-    systemInstruction: string,
-    history: ChatMessage[],
-    userText: string,
-    persona?: PersonaOption
-  ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: systemInstruction }
-    ];
-
-    for (const h of history.slice(-6)) {
-      if (!h.text || !h.text.trim()) continue;
-      messages.push({
-        role: h.role === 'model' ? 'assistant' : 'user',
-        content: h.text
-      });
-    }
-
-    const finalUserMsg =
-      persona && persona.id !== 'default'
-        ? `[Rol xatırlatması: "${persona.name}" xarakterində qalaraq cavab ver]\n${userText}`
-        : userText;
-
-    messages.push({ role: 'user', content: finalUserMsg });
-    return messages;
-  }
-
   private extractGroundingSources(response: any): { title: string; url: string }[] {
     const sources: { title: string; url: string }[] = [];
     try {
@@ -375,148 +308,9 @@ ${config.policyText}`;
     return liveKeywords.some(kw => clean.includes(kw));
   }
 
-  private getOpenAiEndpointAndHeaders(provider: 'openrouter' | 'groq'): {
-    url: string;
-    headers: Record<string, string>;
-  } | null {
-    if (provider === 'openrouter') {
-      const key = (process.env.OPENROUTER_API_KEY || '').trim();
-      if (!key) return null;
-      return {
-        url: 'https://openrouter.ai/api/v1/chat/completions',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`,
-          'HTTP-Referer': OFFICIAL_CHANNEL_URL,
-          'X-Title': 'AAQ Ahl Al Qalam Bot'
-        }
-      };
-    }
-    if (provider === 'groq') {
-      const key = (process.env.GROQ_API_KEY || '').trim();
-      if (!key) return null;
-      return {
-        url: 'https://api.groq.com/openai/v1/chat/completions',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`
-        }
-      };
-    }
-    return null;
-  }
-
-  private async callOpenAiCompatible(
-    modelDef: ModelDefinition,
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-    temperature: number
-  ): Promise<string> {
-    if (modelDef.provider !== 'openrouter' && modelDef.provider !== 'groq') {
-      throw new Error('Invalid external provider');
-    }
-    const endpoint = this.getOpenAiEndpointAndHeaders(modelDef.provider);
-    if (!endpoint) {
-      throw new Error(`${modelDef.requiresKeyEnv} təyin edilməyib`);
-    }
-
-    const res = await fetch(endpoint.url, {
-      method: 'POST',
-      headers: endpoint.headers,
-      signal: AbortSignal.timeout(35000),
-      body: JSON.stringify({
-        model: modelDef.id,
-        messages,
-        temperature,
-        max_tokens: 2048
-      })
-    });
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      throw new Error(`${modelDef.provider.toUpperCase()} HTTP ${res.status}: ${errBody.slice(0, 220)}`);
-    }
-
-    const json = (await res.json()) as any;
-    const text = json?.choices?.[0]?.message?.content?.trim();
-    if (!text) {
-      throw new Error(`${modelDef.provider.toUpperCase()} boş cavab qaytardı`);
-    }
-    return text;
-  }
-
-  private async streamOpenAiCompatible(
-    modelDef: ModelDefinition,
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-    temperature: number,
-    onChunk: (accumulatedText: string) => Promise<void> | void
-  ): Promise<string> {
-    if (modelDef.provider !== 'openrouter' && modelDef.provider !== 'groq') {
-      throw new Error('Invalid external provider');
-    }
-    const endpoint = this.getOpenAiEndpointAndHeaders(modelDef.provider);
-    if (!endpoint) {
-      throw new Error(`${modelDef.requiresKeyEnv} təyin edilməyib`);
-    }
-
-    const res = await fetch(endpoint.url, {
-      method: 'POST',
-      headers: endpoint.headers,
-      signal: AbortSignal.timeout(45000),
-      body: JSON.stringify({
-        model: modelDef.id,
-        messages,
-        temperature,
-        max_tokens: 2048,
-        stream: true
-      })
-    });
-
-    if (!res.ok || !res.body) {
-      const errBody = await res.text().catch(() => '');
-      throw new Error(`${modelDef.provider.toUpperCase()} Stream HTTP ${res.status}: ${errBody.slice(0, 220)}`);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-    let accumulated = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line || !line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(payload);
-          const delta = parsed?.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string' && delta.length > 0) {
-            accumulated += delta;
-            await onChunk(accumulated);
-          }
-        } catch {
-          // ignore partial SSE JSON
-        }
-      }
-    }
-
-    const final = accumulated.trim();
-    if (!final) {
-      throw new Error(`${modelDef.provider.toUpperCase()} axını boş bitdi`);
-    }
-    return final;
-  }
-
   private buildIdentityResponse(modelDef: ModelDefinition, persona: PersonaOption): string {
     if (persona.id === 'cyberpunk') {
-      return `⚡ <b>[NEURO-ID TƏSDİQLƏNDİ — NEO-BAKI 2077]</b>\n\nMən <b>AAQ - Ahl Al Qalam</b> şəbəkəsinin kiberpunk qovşağıyam. Hazırda beynim <b>${modelDef.alias}</b> kvant nüvəsi üzərində işləyir.\n\n📢 Şəbəkə Kanalı: ${OFFICIAL_CHANNEL_URL}\n🟣 Nüvəni dəyiş: <code>/model</code> | 🎭 Rolu dəyiş: <code>/roleplay</code>`;
+      return `⚡ <b>[NEURO-ID TƏSDİQLƏNDİ — NEO-BAKI 2077]</b>\n\nMən <b>AAQ - Ahl Al Qalam</b> şəbəkəsinin kiberpunk qovşağıyam. Hazırda beynim <b>${modelDef.alias}</b> nüvəsi üzərində işləyir.\n\n📢 Şəbəkə Kanalı: ${OFFICIAL_CHANNEL_URL}\n🟣 Modeli dəyiş: <code>/model</code> | 🎭 Rolu dəyiş: <code>/roleplay</code>`;
     }
     if (persona.id === 'wise_poet') {
       return `📜 <b>Hikmət və Qələm Məclisi</b>\n\nEy elm yolçusu! Səninlə həmsöhbət olan <b>"AAQ - Ahl Al Qalam"</b> məclisinin müdrik qələmidir. Bu an düşüncələrimi <b>${modelDef.alias}</b> zəka mühərriki ilə sözə çevirirəm.\n\n📢 Rəsmi Məkan: ${OFFICIAL_CHANNEL_URL}\n🟣 Model: <code>/model</code> | 🎭 Xarakter: <code>/roleplay</code>`;
@@ -545,93 +339,69 @@ ${config.policyText}`;
       return reply;
     }
 
-    if (!this.ai && this.hasApiKey()) {
-      this.initClient();
-    }
-
-    if (cascade.length === 0) {
-      return `⚠️ Heç bir AI provayder açarı tapılmadı. Zəhmət olmasa server mühitinə <code>GEMINI_API_KEY</code>, <code>OPENROUTER_API_KEY</code> və ya <code>GROQ_API_KEY</code> əlavə edin.`;
+    const client = this.ai || this.initClient();
+    if (!client) {
+      return `⚠️ <code>GEMINI_API_KEY</code> təyin edilməyib.`;
     }
 
     const history = storage.getChatHistory(userId);
     const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, userText, persona);
-    const openAiMessages = this.buildOpenAiMessages(systemInstruction, history, userText, persona);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
     const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
 
     let didAttemptSearch = false;
 
     for (const target of cascade) {
-      if (target.provider === 'gemini') {
-        const client = this.ai || this.initClient();
-        if (!client) continue;
+      const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
 
-        if (needsSearch && !didAttemptSearch) {
-          didAttemptSearch = true;
-          try {
-            const response = await client.models.generateContent({
-              model: target.id,
-              contents: sanitizedGeminiContents,
-              config: {
-                systemInstruction,
-                temperature: temp,
-                tools: [{ googleSearch: {} }]
-              }
-            });
-            let replyText = response.text?.trim();
-            if (replyText) {
-              const sources = this.extractGroundingSources(response);
-              if (sources.length > 0) {
-                replyText += `\n\n🌐 <b>Araşdırılan Mənbələr:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
-              }
-              storage.addChatMessage(userId, 'user', userText);
-              storage.addChatMessage(userId, 'model', replyText);
-              return replyText;
-            }
-          } catch (searchErr: any) {
-            storage.addLog('gemini', `Axtarış xətası (${target.id}): ${searchErr?.message || searchErr}`);
-          }
-        }
-
+      if (needsSearch && !didAttemptSearch) {
+        didAttemptSearch = true;
         try {
           const response = await client.models.generateContent({
             model: target.id,
             contents: sanitizedGeminiContents,
             config: {
-              systemInstruction,
-              temperature: temp
+              systemInstruction: targetInstruction,
+              temperature: temp,
+              tools: [{ googleSearch: {} }]
             }
           });
-          const replyText = response.text?.trim();
+          let replyText = response.text?.trim();
           if (replyText) {
+            const sources = this.extractGroundingSources(response);
+            if (sources.length > 0) {
+              replyText += `\n\n🌐 <b>Araşdırılan Mənbələr:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
+            }
             storage.addChatMessage(userId, 'user', userText);
             storage.addChatMessage(userId, 'model', replyText);
             return replyText;
           }
-        } catch (err: any) {
-          storage.addLog('gemini', `Model (${target.id}) xətası: ${err?.message || err}`);
+        } catch (searchErr: any) {
+          storage.addLog('gemini', `Axtarış xətası (${target.id}): ${searchErr?.message || searchErr}`);
         }
-      } else {
-        // OpenRouter or Groq
-        try {
-          const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
-          const targetMessages = [
-            { role: 'system' as const, content: targetInstruction },
-            ...openAiMessages.slice(1)
-          ];
-          const replyText = await this.callOpenAiCompatible(target, targetMessages, temp);
-          if (replyText) {
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', replyText);
-            return replyText;
+      }
+
+      try {
+        const response = await client.models.generateContent({
+          model: target.id,
+          contents: sanitizedGeminiContents,
+          config: {
+            systemInstruction: targetInstruction,
+            temperature: temp
           }
-        } catch (err: any) {
-          storage.addLog('gemini', `${target.provider.toUpperCase()} (${target.id}) xətası: ${err?.message || err}`);
+        });
+        const replyText = response.text?.trim();
+        if (replyText) {
+          storage.addChatMessage(userId, 'user', userText);
+          storage.addChatMessage(userId, 'model', replyText);
+          return replyText;
         }
+      } catch (err: any) {
+        storage.addLog('gemini', `Model (${target.id}) xətası: ${err?.message || err}`);
       }
     }
 
-    const fallbackMsg = `💡 <b>AAQ İntellektual Cavab:</b>\n\n"${userText}" üzrə sorğunuz qəbul edildi, lakin hazırda bütün AI provayderlərində müvəqqəti yüksək sıxlıq müşahidə olunur. Zəhmət olmasa bir neçə saniyə sonra yenidən cəhd edin və ya <code>/model</code> ilə başqa mühərrik seçin.`;
+    const fallbackMsg = `💡 <b>AAQ İntellektual Cavab:</b>\n\n"${userText}" üzrə sorğunuz qəbul edildi, lakin hazırda müvəqqəti yüksək sıxlıq müşahidə olunur. Zəhmət olmasa bir neçə saniyə sonra yenidən cəhd edin və ya <code>/model</code> ilə başqa Gemini modeli seçin.`;
     storage.addChatMessage(userId, 'user', userText);
     storage.addChatMessage(userId, 'model', fallbackMsg);
     return fallbackMsg;
@@ -650,7 +420,6 @@ ${config.policyText}`;
     const { primary, cascade } = this.resolveModelInfo(overrideModel || user?.selectedModel || config.model);
     const activePersonaId = customPersona || user?.roleplayPersona || config.roleplayMode;
     const persona = this.getPersona(activePersonaId);
-    const systemInstruction = this.buildSystemInstruction(primary, activePersonaId);
 
     if (this.isIdentityQuestion(userText)) {
       const reply = this.buildIdentityResponse(primary, persona);
@@ -660,27 +429,21 @@ ${config.policyText}`;
       return reply;
     }
 
-    if (!this.ai && this.hasApiKey()) {
-      this.initClient();
-    }
-
-    if (cascade.length === 0) {
-      const fallback = `⚠️ AI API açarı təyin edilməyib. Serverə <code>GEMINI_API_KEY</code>, <code>OPENROUTER_API_KEY</code> və ya <code>GROQ_API_KEY</code> əlavə edin.`;
+    const client = this.ai || this.initClient();
+    if (!client) {
+      const fallback = `⚠️ <code>GEMINI_API_KEY</code> təyin edilməyib.`;
       await onProgress(fallback, true, primary);
       return fallback;
     }
 
     const history = storage.getChatHistory(userId);
     const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, userText, persona);
-    const openAiMessages = this.buildOpenAiMessages(systemInstruction, history, userText, persona);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
     const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
 
-    // 1. Live search grounding only when Gemini is available and live info is needed
-    if (needsSearch && this.hasApiKey()) {
-      const client = this.ai || this.initClient();
-      const firstGemini = cascade.find(m => m.provider === 'gemini');
-      if (client && firstGemini) {
+    if (needsSearch) {
+      const firstGemini = cascade[0];
+      if (firstGemini) {
         try {
           const response = await client.models.generateContent({
             model: firstGemini.id,
@@ -708,76 +471,42 @@ ${config.policyText}`;
       }
     }
 
-    // 2. Real-time streaming cascade across Gemini -> Groq -> OpenRouter
     for (const target of cascade) {
       const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
-      if (target.provider === 'gemini') {
-        const client = this.ai || this.initClient();
-        if (!client) continue;
-
-        try {
-          const responseStream = await client.models.generateContentStream({
-            model: target.id,
-            contents: sanitizedGeminiContents,
-            config: {
-              systemInstruction: targetInstruction,
-              temperature: temp
-            }
-          });
-
-          let accumulatedText = '';
-          for await (const chunk of responseStream) {
-            const chunkText = chunk.text;
-            if (chunkText) {
-              accumulatedText += chunkText;
-              await onProgress(accumulatedText, false, target);
-            }
+      try {
+        const responseStream = await client.models.generateContentStream({
+          model: target.id,
+          contents: sanitizedGeminiContents,
+          config: {
+            systemInstruction: targetInstruction,
+            temperature: temp
           }
+        });
 
-          const finalText = accumulatedText.trim();
-          if (finalText) {
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', finalText);
-            await onProgress(finalText, true, target);
-            return finalText;
+        let accumulatedText = '';
+        for await (const chunk of responseStream) {
+          const chunkText = chunk.text;
+          if (chunkText) {
+            accumulatedText += chunkText;
+            await onProgress(accumulatedText, false, target);
           }
-        } catch (streamErr: any) {
-          storage.addLog(
-            'gemini',
-            `Model (${target.id}) canlı axın cəhdi: ${streamErr?.message || streamErr}. Kaskad davam edir.`
-          );
         }
-      } else {
-        // OpenRouter or Groq SSE streaming
-        try {
-          const targetMessages = [
-            { role: 'system' as const, content: targetInstruction },
-            ...openAiMessages.slice(1)
-          ];
-          const finalText = await this.streamOpenAiCompatible(
-            target,
-            targetMessages,
-            temp,
-            async (acc) => {
-              await onProgress(acc, false, target);
-            }
-          );
-          if (finalText) {
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', finalText);
-            await onProgress(finalText, true, target);
-            return finalText;
-          }
-        } catch (extErr: any) {
-          storage.addLog(
-            'gemini',
-            `${target.provider.toUpperCase()} (${target.id}) axın xətası: ${extErr?.message || extErr}. Kaskad davam edir.`
-          );
+
+        const finalText = accumulatedText.trim();
+        if (finalText) {
+          storage.addChatMessage(userId, 'user', userText);
+          storage.addChatMessage(userId, 'model', finalText);
+          await onProgress(finalText, true, target);
+          return finalText;
         }
+      } catch (streamErr: any) {
+        storage.addLog(
+          'gemini',
+          `Model (${target.id}) canlı axın cəhdi: ${streamErr?.message || streamErr}. Kaskad davam edir.`
+        );
       }
     }
 
-    // 3. Final non-streaming fallback
     const fallbackReply = await this.generateChatReply(userId, userText, customPersona, overrideModel);
     await onProgress(fallbackReply, true, primary);
     return fallbackReply;
@@ -788,6 +517,11 @@ ${config.policyText}`;
     customSystemInstruction?: string,
     modelOverride?: string
   ): Promise<string> {
+    const client = this.ai || this.initClient();
+    if (!client) {
+      return 'Məlumat hazırlandı.';
+    }
+
     const { primary, cascade } = this.resolveModelInfo(modelOverride || 'gemini-2.5-flash');
     const now = new Date();
     const azDateStr = now.toLocaleDateString('az-AZ', {
@@ -804,52 +538,34 @@ ${config.policyText}`;
     const needsSearch = this.shouldSearchWeb(prompt);
 
     for (const target of cascade) {
-      if (target.provider === 'gemini') {
-        const client = this.ai || this.initClient();
-        if (!client) continue;
-        try {
-          const response = await client.models.generateContent({
-            model: target.id,
-            contents: prompt,
-            config: {
-              systemInstruction: instruction,
-              temperature: 0.3,
-              ...(needsSearch ? { tools: [{ googleSearch: {} }] } : {})
-            }
-          });
-          const txt = response.text?.trim();
-          if (txt) return txt;
-        } catch (err: any) {
-          if (needsSearch) {
-            try {
-              const resNoTools = await client.models.generateContent({
-                model: target.id,
-                contents: prompt,
-                config: {
-                  systemInstruction: instruction,
-                  temperature: 0.3
-                }
-              });
-              const txtNoTools = resNoTools.text?.trim();
-              if (txtNoTools) return txtNoTools;
-            } catch {}
+      try {
+        const response = await client.models.generateContent({
+          model: target.id,
+          contents: prompt,
+          config: {
+            systemInstruction: instruction,
+            temperature: 0.3,
+            ...(needsSearch ? { tools: [{ googleSearch: {} }] } : {})
           }
-          storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${err?.message || err}`);
+        });
+        const txt = response.text?.trim();
+        if (txt) return txt;
+      } catch (err: any) {
+        if (needsSearch) {
+          try {
+            const resNoTools = await client.models.generateContent({
+              model: target.id,
+              contents: prompt,
+              config: {
+                systemInstruction: instruction,
+                temperature: 0.3
+              }
+            });
+            const txtNoTools = resNoTools.text?.trim();
+            if (txtNoTools) return txtNoTools;
+          } catch {}
         }
-      } else {
-        try {
-          const txt = await this.callOpenAiCompatible(
-            target,
-            [
-              { role: 'system', content: instruction },
-              { role: 'user', content: prompt }
-            ],
-            0.3
-          );
-          if (txt) return txt;
-        } catch (err: any) {
-          storage.addLog('gemini', `QuickPrompt ${target.provider} (${target.id}): ${err?.message || err}`);
-        }
+        storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${err?.message || err}`);
       }
     }
 
@@ -861,11 +577,9 @@ ${config.policyText}`;
     mimeType: string,
     prompt: string = 'Bu sənədi analiz et, məzmununu xülasə et, əsas bölmələri və vacib qeydləri çıxar.'
   ): Promise<string> {
-    if (!this.ai) {
-      this.initClient();
-    }
+    const client = this.ai || this.initClient();
+    if (!client) throw new Error('GEMINI_API_KEY təyin edilməyib.');
 
-    const client = this.ai;
     const base64Data = buffer.toString('base64');
     const normalizedMime = mimeType && mimeType.includes('pdf') ? 'application/pdf' : (mimeType || 'application/pdf');
 
@@ -878,45 +592,42 @@ Cavabı Azərbaycan dilində aşağıdakı formatda səlis və dolğun hazırla:
 📑 **Əsas Fəsillər və Vacib Punktlar**
 💡 **Mühüm Qeydlər və Nəticə**`;
 
-    if (client) {
-      const modelsToTry = ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
-      for (const modelName of modelsToTry) {
-        try {
-          const response = await client.models.generateContent({
-            model: modelName,
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: normalizedMime,
-                      data: base64Data
-                    }
-                  },
-                  {
-                    text: instruction
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+    for (const modelName of modelsToTry) {
+      try {
+        const response = await client.models.generateContent({
+          model: modelName,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: normalizedMime,
+                    data: base64Data
                   }
-                ]
-              }
-            ],
-            config: {
-              temperature: 0.2
+                },
+                {
+                  text: instruction
+                }
+              ]
             }
-          });
-
-          const replyText = response.text?.trim();
-          if (replyText) {
-            storage.addLog('gemini', `PDF analizi uğurla tamamlandı (${modelName}).`);
-            return replyText;
+          ],
+          config: {
+            temperature: 0.2
           }
-        } catch (err: any) {
-          storage.addLog('error', `PDF model (${modelName}) cəhdi xətası: ${err?.message || err}`);
+        });
+
+        const replyText = response.text?.trim();
+        if (replyText) {
+          storage.addLog('gemini', `PDF analizi uğurla tamamlandı (${modelName}).`);
+          return replyText;
         }
+      } catch (err: any) {
+        storage.addLog('error', `PDF model (${modelName}) cəhdi xətası: ${err?.message || err}`);
       }
     }
 
-    // Secondary fallback: Extract text from buffer if raw text
     if (normalizedMime.startsWith('text/') || buffer.length < 500000) {
       try {
         const textContent = buffer.toString('utf-8').replace(/[^\x20-\x7E\u00A0-\u024F\u0400-\u04FF\u1E00-\u1EFF\n\r\t]/g, ' ').slice(0, 30000);
@@ -935,14 +646,12 @@ Cavabı Azərbaycan dilində aşağıdakı formatda səlis və dolğun hazırla:
     audioBuffer: Buffer,
     mimeType: string = 'audio/ogg'
   ): Promise<string> {
-    if (!this.ai) {
-      this.initClient();
-      if (!this.ai) throw new Error('GEMINI_API_KEY mövcud deyil.');
-    }
+    const client = this.ai || this.initClient();
+    if (!client) throw new Error('GEMINI_API_KEY mövcud deyil.');
 
     try {
       const base64Audio = audioBuffer.toString('base64');
-      const response = await this.ai.models.generateContent({
+      const response = await client.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: {
           parts: [
