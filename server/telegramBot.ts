@@ -115,7 +115,7 @@ export class TelegramBotService {
       try {
         const me = await this.getMe();
         if (me && this.connectionMode === 'polling') {
-          const pollStale = this.lastPollSuccessAt > 0 && Date.now() - this.lastPollSuccessAt > 65000;
+          const pollStale = this.lastPollSuccessAt > 0 && Date.now() - this.lastPollSuccessAt > 55000;
           if (!this.isPolling || !this.isLoopRunning || pollStale) {
             if (pollStale) {
               storage.addLog('keepalive', '⚠️ Polling döngüsü gecikdi, Watchdog tərəfindən avtomatik bərpa edilir...');
@@ -127,7 +127,33 @@ export class TelegramBotService {
           }
         }
         return !!me;
-      } catch (e) {
+      } catch {
+        return false;
+      }
+    });
+
+    keepAliveService.registerWebhookChecker(async () => {
+      if (!this.token) return false;
+      if (this.connectionMode !== 'webhook') return true;
+      try {
+        const info = await this.getWebhookInfo();
+        if (!info) return false;
+        const expectedUrl = this.webhookUrl;
+        if (!info.url || (expectedUrl && info.url !== expectedUrl)) {
+          storage.addLog('keepalive', '⚠️ Webhook URL boşalıb, Watchdog avtomatik bərpa edir...');
+          await this.setupWebhook(expectedUrl || undefined);
+          return true;
+        }
+        if (info.last_error_message && info.pending_update_count > 5) {
+          storage.addLog(
+            'error',
+            `⚠️ Webhook xətası (${info.last_error_message}) — mesaj itkisi olmaması üçün Polling rejiminə ehtiyat keçid edilir.`
+          );
+          await this.removeWebhook();
+          return false;
+        }
+        return true;
+      } catch {
         return false;
       }
     });
@@ -139,21 +165,62 @@ export class TelegramBotService {
     }
   }
 
+  public async probeWebhookReachability(targetUrl: string): Promise<{
+    reachable: boolean;
+    status: number;
+    reason?: string;
+  }> {
+    try {
+      const res = await fetch(targetUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: { 'User-Agent': 'AAQ-Webhook-Probe/2.0' },
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.status >= 200 && res.status < 300) {
+        return { reachable: true, status: res.status };
+      }
+      if (res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) {
+        return {
+          reachable: false,
+          status: res.status,
+          reason: `Ünvan xarici sorğuları HTTP ${res.status} yönləndirməsi (Auth/SSO) ilə bloklayır.`
+        };
+      }
+      return {
+        reachable: false,
+        status: res.status,
+        reason: `Ünvan HTTP ${res.status} cavabı qaytardı.`
+      };
+    } catch (err: any) {
+      return {
+        reachable: false,
+        status: 0,
+        reason: err?.message || 'Şəbəkə əlaqəsi qurulmadı.'
+      };
+    }
+  }
+
   public async initConnection(): Promise<void> {
     const config = storage.getConfig();
     const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+    const preferredWebhookUrl = config.webhookUrl || (appUrl ? `${appUrl}/api/telegram/webhook` : '');
 
-    // If APP_URL is HTTPS and mode is webhook or not explicitly set to polling, activate webhook
-    if (config.connectionMode !== 'polling' && appUrl && appUrl.startsWith('https://')) {
-      try {
-        await this.setupWebhook();
-        return;
-      } catch (e: any) {
-        storage.addLog('error', `Webhook avto-quraşdırma xətası: ${e?.message || e}. Polling rejiminə keçilir.`);
+    // If APP_URL or configured webhookUrl is HTTPS and mode allows webhook, probe reachability first
+    if (config.connectionMode !== 'polling' && preferredWebhookUrl && preferredWebhookUrl.startsWith('https://')) {
+      const probe = await this.probeWebhookReachability(preferredWebhookUrl);
+      if (probe.reachable) {
+        const res = await this.setupWebhook(preferredWebhookUrl);
+        if (res.success) return;
+      } else {
+        storage.addLog(
+          'keepalive',
+          `ℹ️ Webhook ilkin yoxlaması (${preferredWebhookUrl}): ${probe.reason} Botun kəsilməməsi üçün Polling + 30s Watchdog aktiv saxlanılır.`
+        );
       }
     }
 
-    // Default to Polling if webhook is not available or local
+    // Default to resilient Polling + 30s Watchdog
     await this.startPolling();
   }
 
@@ -449,8 +516,9 @@ export class TelegramBotService {
       return { success: false, url: '', message: 'Bot Token təyin edilməyib.' };
     }
 
+    const config = storage.getConfig();
     const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
-    const targetUrl = customUrl || (appUrl ? `${appUrl}/api/telegram/webhook` : '');
+    const targetUrl = (customUrl || config.webhookUrl || (appUrl ? `${appUrl}/api/telegram/webhook` : '')).trim();
 
     if (!targetUrl || !targetUrl.startsWith('https://')) {
       return {
@@ -464,16 +532,45 @@ export class TelegramBotService {
       const me = await this.getMe();
       if (!me) throw new Error('Bot məlumatları alına bilmədi.');
 
+      // Verify target URL does not reject Telegram POSTs with an auth redirect (e.g. 302 SSO gate)
+      const probe = await this.probeWebhookReachability(targetUrl);
+      if (!probe.reachable) {
+        storage.addLog(
+          'keepalive',
+          `⚠️ Webhook yoxlaması dayandırıldı (${targetUrl}): ${probe.reason} Polling rejimi qorunur.`
+        );
+        if (!this.isPolling) {
+          await this.startPolling().catch(() => {});
+        }
+        return {
+          success: false,
+          url: targetUrl,
+          message: `Webhook aktivləşdirilmədi (${probe.reason}). Botun mesajları itirməməsi üçün Polling + 30s Watchdog aktiv saxlanıldı. İctimai Cloud Run URL-i ilə Webhook 24/7 işləyəcək.`
+        };
+      }
+
       // Stop polling to prevent 409 conflicts
       this.shouldStop = true;
       this.isPolling = false;
+      this.isLoopRunning = false;
 
-      // Register webhook on Telegram
-      await this.apiCall('setWebhook', {
+      const setPayload: any = {
         url: targetUrl,
+        max_connections: 40,
         drop_pending_updates: false,
         allowed_updates: ['message', 'callback_query', 'inline_query']
-      });
+      };
+      if (config.webhookSecret) {
+        setPayload.secret_token = config.webhookSecret;
+      }
+
+      // Register webhook on Telegram
+      await this.apiCall('setWebhook', setPayload);
+
+      const verifyInfo = await this.getWebhookInfo();
+      if (verifyInfo && verifyInfo.url !== targetUrl) {
+        throw new Error('Telegram Webhook ünvanını təsdiqləmədi.');
+      }
 
       this.connectionMode = 'webhook';
       this.webhookUrl = targetUrl;
@@ -481,7 +578,7 @@ export class TelegramBotService {
 
       storage.addLog(
         'telegram',
-        `⚡ Telegram Webhook aktivləşdirildi: ${targetUrl}. Bot artıq server yatdıqda belə hər mesajda dərhal oyanacaq! (@${me.username})`
+        `⚡ Telegram Webhook 24/7 aktivləşdirildi: ${targetUrl} (max_connections: 40). Bot hər mesajda dərhal oyanacaq! (@${me.username})`
       );
 
       return {
@@ -990,7 +1087,7 @@ export class TelegramBotService {
           case 'keepalive':
           case 'stats': {
             const ka = keepAliveService.getStatus();
-            const hasGemini = geminiService.hasApiKey();
+            const keys = geminiService.getProviderStatus();
             const uptimeMin = Math.floor(ka.uptimeSeconds / 60);
             const activeUser = storage.getUser(userId);
             const cfg = storage.getConfig();
@@ -1000,12 +1097,13 @@ export class TelegramBotService {
             await this.sendSafeHtml(
               chatId,
               `⚡ <b>AAQ SİSTEM VƏ OYAQ QALMA STATİSTİKASI</b>\n\n` +
-                `🟢 <b>Vəziyyət:</b> Oyaq (${this.connectionMode === 'webhook' ? 'Webhook 24/7' : 'Polling Watchdog'})\n` +
+                `🟢 <b>Vəziyyət:</b> Oyaq (${this.connectionMode === 'webhook' ? 'Webhook 24/7' : 'Polling + 30s Watchdog'})\n` +
                 `⏱️ <b>Fasiləsiz İş (Uptime):</b> ${uptimeMin} dəqiqə\n` +
-                `💓 <b>Nabız Sayı:</b> ${ka.totalPings} | İnterval: ${ka.intervalMinutes} dəq\n` +
+                `💓 <b>Nabız Sayı:</b> ${ka.totalPings} | İnterval: ${ka.intervalMinutes} dəq | Socket Timeout: ${Math.round(ka.httpKeepAliveTimeoutMs / 1000)}s\n` +
+                `🌐 <b>Webhook Oyanma:</b> ${ka.webhookPings} dəfə (${ka.webhookHealthOk ? 'Sağlam' : 'Yoxlanılır'})\n` +
                 `🤖 <b>Aktiv Model:</b> ${modelDef?.name || activeModelId}\n` +
                 `🎭 <b>Aktiv Xarakter:</b> ${activePersona.icon} ${activePersona.name}\n` +
-                `🔑 <b>Gemini AI:</b> ${hasGemini ? '🟢 Aktiv' : '⚪ Yoxdur'}`
+                `🔑 <b>Mühərriklər:</b> Gemini ${keys.gemini ? '🟢' : '⚪'} | OpenRouter ${keys.openrouter ? '🟢' : '⚪'} | Groq ${keys.groq ? '🟢' : '⚪'}`
             );
             return;
           }
@@ -1605,27 +1703,36 @@ export class TelegramBotService {
       const buffer = Buffer.from(arrayBuffer);
 
       const userPrompt = msg.caption || 'Bu sənədin əsas məğzini çıxar, vacib punktları qeyd et və aydın xülasə təqdim et.';
-      const analysis = await geminiService.analyzeVisionOrPdf(
+      const rawAnalysis = await geminiService.analyzeVisionOrPdf(
         buffer,
         isPdf ? 'application/pdf' : 'text/plain',
         userPrompt
       );
+      const formattedAnalysis = this.formatAiOutputForTelegramHtml(rawAnalysis, false);
 
-      const responseText = `📄 <b>Sənəd Analizi: "${this.escapeHtml(fileName)}"</b>\n\n${analysis}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
+      const responseText = `📄 <b>Sənəd Analizi: "${this.escapeHtml(fileName)}"</b>\n\n${formattedAnalysis}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
+      const chunks = this.splitLongText(responseText, 3950);
 
       if (statusMsg?.message_id) {
         try {
           await this.apiCall('editMessageText', {
             chat_id: chatId,
             message_id: statusMsg.message_id,
-            text: responseText,
+            text: chunks[0],
             parse_mode: 'HTML'
           });
+          for (let i = 1; i < chunks.length; i++) {
+            await this.sendSafeHtml(chatId, chunks[i]);
+          }
         } catch {
-          await this.sendSafeHtml(chatId, responseText);
+          for (const chunk of chunks) {
+            await this.sendSafeHtml(chatId, chunk);
+          }
         }
       } else {
-        await this.sendSafeHtml(chatId, responseText);
+        for (const chunk of chunks) {
+          await this.sendSafeHtml(chatId, chunk);
+        }
       }
     } catch (err: any) {
       await this.sendSafeHtml(
@@ -1733,11 +1840,12 @@ Aşağıdakı bölmələrdən modeli dəyişə və ya əmrlərdən dərhal istif
 📢 <b>Rəsmi Kanal:</b> ${OFFICIAL_CHANNEL_URL}
 
 🤖 <b>Süni İntellekt & Analiz:</b>
-• <code>/sorus &lt;sual&gt;</code> — Gemini AI-dən sürətli və dəqiq cavab alın
+• <code>/sorus &lt;sual&gt;</code> — Seçilmiş AI modelindən sürətli və dəqiq cavab alın
 • <code>/pdf</code> — PDF sənədlərini analiz edin və xülasə çıxarın
-• <code>/model</code> — Aktiv Gemini modelini dəyişin (Gemini 3.8 Flash, 3.7 Flash, 3.1 Flash Lite...)
+• <code>/model</code> — Aktiv AI modelini dəyişin (Gemini Flash, DeepSeek R1/V3, Llama 3.3, Qwen 2.5, Groq)
 • <code>/roleplay</code> — AI xarakterini dəyişin (Müdrik Filosof, Proqramçı, Müəllim...)
 • <code>/clear</code> — Söhbət yaddaşını təmizləyin
+• <code>/stats</code> — Sistemin oyaq qalma və model statistikası
 
 📚 <b>Təhsil & Elm:</b>
 • <code>/sozluk &lt;söz&gt;</code> — Sözün leksik mənası, etimologiyası və izahı
@@ -2051,9 +2159,10 @@ D) Fikrət Əmirov (1920)
     }
 
     await this.sendChatAction(chatId, 'typing');
-    const translation = await geminiService.quickPrompt(
+    const translationRaw = await geminiService.quickPrompt(
       `Aşağıdakı mətni ən səlis və peşəkar formada Azərbaycan dilinə tərcümə et:\n"${query}"`
     );
+    const translation = this.formatAiOutputForTelegramHtml(translationRaw, false);
 
     const fullText = `🌍 <b>Tərcümə:</b>\n\n${translation}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
     await this.sendSafeHtml(chatId, fullText);
@@ -2067,9 +2176,10 @@ D) Fikrət Əmirov (1920)
     }
 
     await this.sendChatAction(chatId, 'typing');
-    const summary = await geminiService.quickPrompt(
+    const summaryRaw = await geminiService.quickPrompt(
       `Aşağıdakı mətni əsas tezislərlə qısa, aydın və oxunaqlı şəkildə xülasə et:\n"${query}"`
     );
+    const summary = this.formatAiOutputForTelegramHtml(summaryRaw, false);
 
     const fullText = `📝 <b>Qısa Xülasə:</b>\n\n${summary}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
     await this.sendSafeHtml(chatId, fullText);
@@ -2095,11 +2205,12 @@ D) Fikrət Əmirov (1920)
       return;
     }
 
-    // If symbolic or word problem, solve with Gemini
+    // If symbolic or word problem, solve with AI
     await this.sendChatAction(chatId, 'typing');
-    const result = await geminiService.quickPrompt(
+    const resultRaw = await geminiService.quickPrompt(
       `Riyazi tapşırıq: "${query}". Dəqiq hesabla, addım-addım həll yolunu izah et və yekun cavabı ver.`
     );
+    const result = this.formatAiOutputForTelegramHtml(resultRaw, false);
     const fullText = `🔢 <b>Riyazi Hesablama Nəticəsi:</b>\n\n${result}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
     await this.sendSafeHtml(chatId, fullText);
   }
@@ -2132,7 +2243,7 @@ D) Fikrət Əmirov (1920)
       return;
     }
 
-    // Fallback to Gemini
+    // Fallback to AI
     await this.sendChatAction(chatId, 'typing');
     const prompt = `"${query}" sözü üçün Azərbaycan dilinin izahlı lüğətinə uyğun məlumat hazırla:
 1. Mənası və izahı
@@ -2140,7 +2251,8 @@ D) Fikrət Əmirov (1920)
 3. Sinonimləri və Antonimləri
 4. Nümunə cümlə.`;
 
-    const def = await geminiService.quickPrompt(prompt);
+    const defRaw = await geminiService.quickPrompt(prompt);
+    const def = this.formatAiOutputForTelegramHtml(defRaw, false);
     const fullText = `📖 <b>Azərbaycan İzahlı Lüğəti ("${this.escapeHtml(query)}"):</b>\n\n${def}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
     await this.sendSafeHtml(chatId, fullText);
   }
@@ -2152,7 +2264,10 @@ D) Fikrət Əmirov (1920)
     let liveData = null;
     try {
       const weatherUrl = `https://wttr.in/${encodeURIComponent(cityName)}?format=j1`;
-      const res = await fetch(weatherUrl, { headers: { 'User-Agent': 'AAQ-Bot' } });
+      const res = await fetch(weatherUrl, {
+        headers: { 'User-Agent': 'AAQ-Bot' },
+        signal: AbortSignal.timeout(5000)
+      });
       if (res.ok) {
         const data = (await res.json()) as any;
         const current = data.current_condition?.[0];
@@ -2183,7 +2298,12 @@ D) Fikrət Əmirov (1920)
 
       await this.sendSafeHtml(chatId, fullText);
     } else {
-      const fullText = `🌤️ <b>HAVA MƏLUMATI: ${this.escapeHtml(cityName.toUpperCase())}</b>\n\n${cityName} şəhərində mülayim hava şəraiti müşahidə olunur.\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
+      await this.sendChatAction(chatId, 'typing');
+      const aiWeatherRaw = await geminiService.quickPrompt(
+        `${cityName} şəhəri üçün cari mövsümə və iqlimə uyğun qısa hava proqnozu və geyim tövsiyəsi ver.`
+      );
+      const aiWeather = this.formatAiOutputForTelegramHtml(aiWeatherRaw, false);
+      const fullText = `🌤️ <b>HAVA MƏLUMATI: ${this.escapeHtml(cityName.toUpperCase())}</b>\n\n${aiWeather}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
       await this.sendSafeHtml(chatId, fullText);
     }
   }
@@ -2564,11 +2684,11 @@ Artıq botun bütün süni intellekt, elmi və moderasiya imkanlarından yenidə
     ]);
 
     const activeDef = AVAILABLE_MODELS.find(m => m.id === activeModelId);
-    const text = `🤖 <b>GEMINI AI MODEL SEÇİMİ</b>
+    const text = `🤖 <b>AI MODEL SEÇİMİ</b>
 
 Hazırda aktiv modeliniz: <b>${activeDef?.name || activeModelId}</b>
 
-Aşağıdakı modellərdən birini seçərək botun cavabvermə intellektini və sürətini təyin edə bilərsiniz:`;
+Aşağıdakı modellərdən (Google Gemini, DeepSeek, Llama, Qwen, Groq) birini seçərək botun cavabvermə intellektini və üslubunu təyin edə bilərsiniz:`;
 
     await this.sendSafeHtml(chatId, text, {
       reply_markup: { inline_keyboard: buttons }
@@ -2732,7 +2852,7 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
 
         await this.sendSafeHtml(
           chatId,
-          `✅ <b>Aktiv Gemini Modeli Təyin Edildi:</b> ${def?.name || modelId}\n\n<i>İndi suallarınızı birbaşa bu model ən yüksək sürət və dəqiqliklə cavablandıracaq.</i>`,
+          `✅ <b>Aktiv AI Modeli Təyin Edildi:</b> ${def?.name || modelId}\n\n<i>İndi suallarınızı birbaşa bu model ən yüksək sürət və dəqiqliklə cavablandıracaq.</i>`,
           { reply_markup: navKb }
         );
         return;

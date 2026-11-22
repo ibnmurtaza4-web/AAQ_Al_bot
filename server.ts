@@ -14,6 +14,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '35mb' }));
@@ -57,6 +58,7 @@ app.get('/api/status', async (req, res) => {
       botRunning: telegramBot.isRunning(),
       botInfo,
       hasGeminiApiKey: geminiService.hasApiKey(),
+      providerKeys: geminiService.getProviderStatus(),
       selectedModel: config.model,
       roleplayMode: config.roleplayMode,
       totalUsers: users.length,
@@ -222,8 +224,9 @@ app.get('/api/tickets', (req, res) => {
 
 app.post('/api/tickets/reply', async (req, res) => {
   try {
-    const { ticketId, replyText, repliedBy } = req.body;
-    if (!ticketId || !replyText) {
+    const { ticketId, replyText, replyMessage, repliedBy } = req.body;
+    const finalReply = (replyText || replyMessage || '').trim();
+    if (!ticketId || !finalReply) {
       return res.status(400).json({ error: 'Bilet ID və cavab mətni tələb olunur.' });
     }
 
@@ -235,11 +238,11 @@ app.post('/api/tickets/reply', async (req, res) => {
     // Send direct reply to user on Telegram
     await telegramBot.sendSafeHtml(
       ticket.userId,
-      `🔔 <b>AAQ - AHL AL QALAM RƏHBƏRLİYİNDƏN CAVAB:</b>\n\n${telegramBot.escapeHtml(replyText)}\n\n<i>Müraciətiniz: "${telegramBot.escapeHtml(ticket.message)}"</i>`
+      `🔔 <b>AAQ - AHL AL QALAM RƏHBƏRLİYİNDƏN CAVAB:</b>\n\n${telegramBot.escapeHtml(finalReply)}\n\n<i>Müraciətiniz: "${telegramBot.escapeHtml(ticket.message)}"</i>`
     );
 
-    const updatedTicket = storage.updateContactTicketReply(ticketId, replyText, repliedBy || 'AAQ Rəhbərlik');
-    storage.addLog('admin', `Veb paneldən biletə (#${ticketId} - ${ticket.userId}) cavab göndərildi: ${replyText}`);
+    const updatedTicket = storage.updateContactTicketReply(ticketId, finalReply, repliedBy || 'AAQ Rəhbərlik');
+    storage.addLog('admin', `Veb paneldən biletə (#${ticketId} - ${ticket.userId}) cavab göndərildi: ${finalReply}`);
 
     res.json({ success: true, ticket: updatedTicket });
   } catch (err: any) {
@@ -274,7 +277,7 @@ app.post('/api/broadcast', async (req, res) => {
       undefined,
       targetType || 'all'
     );
-    res.json({ success: true, ...result });
+    res.json({ success: true, recipientCount: result.total, ...result });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -344,18 +347,37 @@ app.get('/api/metadata', (req, res) => {
   });
 });
 
-// 16. Telegram Webhook
+// 16. Telegram Webhook (GET probe + POST update handler)
+app.get('/api/telegram/webhook', (req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: 'AAQ Telegram Webhook Gateway',
+    connectionMode: telegramBot.getConnectionMode(),
+    webhookUrl: telegramBot.getWebhookUrl(),
+    botActive: telegramBot.isRunning(),
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.post('/api/telegram/webhook', async (req, res) => {
   try {
+    const cfg = storage.getConfig();
+    if (cfg.webhookSecret) {
+      const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
+      if (headerSecret && headerSecret !== cfg.webhookSecret) {
+        return res.status(401).send('Unauthorized webhook secret');
+      }
+    }
+
     const update = req.body;
-    if (update) {
+    if (update && (update.update_id !== undefined || update.message || update.callback_query || update.inline_query)) {
       keepAliveService.recordWake('telegram_webhook', { updateId: update.update_id });
       telegramBot.processUpdate(update).catch(err => {
         storage.addLog('error', `Webhook update xətası: ${err?.message || err}`);
       });
     }
     res.status(200).send('OK');
-  } catch (err: any) {
+  } catch {
     res.status(200).send('OK');
   }
 });
@@ -390,10 +412,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 AAQ Telegram Bot Server işə düşdü: http://localhost:${PORT}`);
     storage.addLog('info', `Server port ${PORT} üzərində işə salındı.`);
   });
+
+  // Extend HTTP keep-alive socket timeouts for long-lived connections & webhook resilience
+  httpServer.keepAliveTimeout = 180000;
+  httpServer.headersTimeout = 185000;
+  httpServer.requestTimeout = 120000;
+  keepAliveService.setHttpKeepAliveTimeout(180000);
 }
 
 startServer();

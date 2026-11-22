@@ -113,6 +113,16 @@ export async function syncToGitHub(params: GitHubSyncParams): Promise<GitHubSync
         configured: !!process.env.GEMINI_API_KEY
       },
       {
+        key: 'OPENROUTER_API_KEY',
+        description: 'OpenRouter API Açarı (DeepSeek R1/V3, Llama, Qwen)',
+        configured: !!process.env.OPENROUTER_API_KEY
+      },
+      {
+        key: 'GROQ_API_KEY',
+        description: 'Groq LPU API Açarı (Llama 3.3, DeepSeek R1 70B)',
+        configured: !!process.env.GROQ_API_KEY
+      },
+      {
         key: 'ADMIN_SECRET_KEY',
         description: 'AAQ Baş Admin Parolu',
         configured: !!currentConfig.adminSecretKey

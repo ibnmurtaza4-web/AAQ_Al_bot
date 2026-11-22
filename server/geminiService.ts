@@ -133,6 +133,19 @@ export class GeminiService {
     return !!(process.env.GEMINI_API_KEY || '').trim();
   }
 
+  public getProviderStatus(): { gemini: boolean; openrouter: boolean; groq: boolean } {
+    return {
+      gemini: !!(process.env.GEMINI_API_KEY || '').trim(),
+      openrouter: !!(process.env.OPENROUTER_API_KEY || '').trim(),
+      groq: !!(process.env.GROQ_API_KEY || '').trim()
+    };
+  }
+
+  public isProviderConfigured(provider: 'gemini' | 'openrouter' | 'groq'): boolean {
+    const status = this.getProviderStatus();
+    return Boolean(status[provider]);
+  }
+
   public getPersona(personaId?: string): PersonaOption {
     return ROLEPLAY_PERSONAS.find(p => p.id === personaId) || ROLEPLAY_PERSONAS[0];
   }
@@ -151,6 +164,12 @@ export class GeminiService {
 
     const preferredOrderIds = [
       matched.id,
+      ...(matched.provider === 'openrouter'
+        ? ['deepseek/deepseek-chat:free', 'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen-2.5-72b-instruct:free']
+        : []),
+      ...(matched.provider === 'groq'
+        ? ['llama-3.3-70b-versatile', 'deepseek-r1-distill-llama-70b']
+        : []),
       'gemini-2.5-flash',
       'gemini-3.8-flash',
       'gemini-3.7-flash',
@@ -278,6 +297,166 @@ ${config.policyText}`;
     return contents;
   }
 
+  private buildOpenAIMessages(
+    systemInstruction: string,
+    history: ChatMessage[],
+    userText: string,
+    persona?: PersonaOption
+  ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: systemInstruction }
+    ];
+
+    for (const h of history.slice(-6)) {
+      if (!h.text || !h.text.trim()) continue;
+      messages.push({
+        role: h.role === 'model' ? 'assistant' : 'user',
+        content: h.text
+      });
+    }
+
+    const wrappedPrompt =
+      persona && persona.id !== 'default'
+        ? `[Aktiv Rol: ${persona.name} — Roldan çıxmadan cavab ver]\n${userText}`
+        : userText;
+
+    messages.push({ role: 'user', content: wrappedPrompt });
+    return messages;
+  }
+
+  private getExternalProviderEndpoint(provider: 'openrouter' | 'groq'): {
+    url: string;
+    apiKey: string;
+    headers: Record<string, string>;
+  } {
+    if (provider === 'groq') {
+      const apiKey = (process.env.GROQ_API_KEY || '').trim();
+      return {
+        url: 'https://api.groq.com/openai/v1/chat/completions',
+        apiKey,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        }
+      };
+    }
+
+    const apiKey = (process.env.OPENROUTER_API_KEY || '').trim();
+    const appUrl = (process.env.APP_URL || 'https://t.me/AAQ_Offical').trim();
+    return {
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      apiKey,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': appUrl,
+        'X-Title': 'AAQ - Ahl Al Qalam Bot'
+      }
+    };
+  }
+
+  private async callOpenAICompatible(
+    provider: 'openrouter' | 'groq',
+    modelId: string,
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    temperature: number
+  ): Promise<string> {
+    const { url, apiKey, headers } = this.getExternalProviderEndpoint(provider);
+    if (!apiKey) {
+      throw new Error(`${provider === 'groq' ? 'GROQ_API_KEY' : 'OPENROUTER_API_KEY'} təyin edilməyib`);
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: modelId,
+        messages,
+        temperature,
+        max_tokens: 2048,
+        stream: false
+      }),
+      signal: AbortSignal.timeout(45000)
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`${provider.toUpperCase()} HTTP ${res.status}: ${errBody.slice(0, 220)}`);
+    }
+
+    const data = (await res.json()) as any;
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content || typeof content !== 'string') {
+      throw new Error(`${provider.toUpperCase()} boş cavab qaytardı`);
+    }
+    return content.trim();
+  }
+
+  private async streamOpenAICompatible(
+    provider: 'openrouter' | 'groq',
+    modelId: string,
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    temperature: number,
+    onChunk: (accumulated: string) => Promise<void> | void
+  ): Promise<string> {
+    const { url, apiKey, headers } = this.getExternalProviderEndpoint(provider);
+    if (!apiKey) {
+      throw new Error(`${provider === 'groq' ? 'GROQ_API_KEY' : 'OPENROUTER_API_KEY'} təyin edilməyib`);
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: modelId,
+        messages,
+        temperature,
+        max_tokens: 2048,
+        stream: true
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+
+    if (!res.ok || !res.body) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`${provider.toUpperCase()} Stream HTTP ${res.status}: ${errBody.slice(0, 220)}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let accumulated = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || !line.startsWith('data:')) continue;
+        const dataStr = line.slice(5).trim();
+        if (dataStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(dataStr);
+          const delta = parsed?.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string' && delta.length > 0) {
+            accumulated += delta;
+            await onChunk(accumulated);
+          }
+        } catch {
+          // ignore partial SSE JSON frames
+        }
+      }
+    }
+
+    return accumulated.trim();
+  }
+
   private extractGroundingSources(response: any): { title: string; url: string }[] {
     const sources: { title: string; url: string }[] = [];
     try {
@@ -330,7 +509,6 @@ ${config.policyText}`;
     const { primary, cascade } = this.resolveModelInfo(overrideModel || user?.selectedModel || config.model);
     const activePersonaId = customPersona || user?.roleplayPersona || config.roleplayMode;
     const persona = this.getPersona(activePersonaId);
-    const systemInstruction = this.buildSystemInstruction(primary, activePersonaId);
 
     if (this.isIdentityQuestion(userText)) {
       const reply = this.buildIdentityResponse(primary, persona);
@@ -340,8 +518,9 @@ ${config.policyText}`;
     }
 
     const client = this.ai || this.initClient();
-    if (!client) {
-      return `⚠️ <code>GEMINI_API_KEY</code> təyin edilməyib.`;
+    const providerStatus = this.getProviderStatus();
+    if (!providerStatus.gemini && !providerStatus.openrouter && !providerStatus.groq) {
+      return `⚠️ AI API açarları (<code>GEMINI_API_KEY</code>, <code>OPENROUTER_API_KEY</code> və ya <code>GROQ_API_KEY</code>) mühit dəyişənlərində təyin edilməyib.`;
     }
 
     const history = storage.getChatHistory(userId);
@@ -352,7 +531,28 @@ ${config.policyText}`;
     let didAttemptSearch = false;
 
     for (const target of cascade) {
+      if (!this.isProviderConfigured(target.provider)) {
+        continue;
+      }
+
       const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
+
+      if (target.provider === 'openrouter' || target.provider === 'groq') {
+        try {
+          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, userText, persona);
+          const replyText = await this.callOpenAICompatible(target.provider, target.id, openAiMsgs, temp);
+          if (replyText) {
+            storage.addChatMessage(userId, 'user', userText);
+            storage.addChatMessage(userId, 'model', replyText);
+            return replyText;
+          }
+        } catch (extErr: any) {
+          storage.addLog('gemini', `Model (${target.id}) xətası: ${extErr?.message || extErr}`);
+        }
+        continue;
+      }
+
+      if (!client) continue;
 
       if (needsSearch && !didAttemptSearch) {
         didAttemptSearch = true;
@@ -401,7 +601,7 @@ ${config.policyText}`;
       }
     }
 
-    const fallbackMsg = `💡 <b>AAQ İntellektual Cavab:</b>\n\n"${userText}" üzrə sorğunuz qəbul edildi, lakin hazırda müvəqqəti yüksək sıxlıq müşahidə olunur. Zəhmət olmasa bir neçə saniyə sonra yenidən cəhd edin və ya <code>/model</code> ilə başqa Gemini modeli seçin.`;
+    const fallbackMsg = `💡 <b>AAQ İntellektual Cavab:</b>\n\n"${userText}" üzrə sorğunuz qəbul edildi, lakin hazırda müvəqqəti yüksək sıxlıq müşahidə olunur. Zəhmət olmasa bir neçə saniyə sonra yenidən cəhd edin və ya <code>/model</code> ilə başqa AI modeli seçin.`;
     storage.addChatMessage(userId, 'user', userText);
     storage.addChatMessage(userId, 'model', fallbackMsg);
     return fallbackMsg;
@@ -430,8 +630,9 @@ ${config.policyText}`;
     }
 
     const client = this.ai || this.initClient();
-    if (!client) {
-      const fallback = `⚠️ <code>GEMINI_API_KEY</code> təyin edilməyib.`;
+    const providerStatus = this.getProviderStatus();
+    if (!providerStatus.gemini && !providerStatus.openrouter && !providerStatus.groq) {
+      const fallback = `⚠️ AI API açarları təyin edilməyib.`;
       await onProgress(fallback, true, primary);
       return fallback;
     }
@@ -441,8 +642,8 @@ ${config.policyText}`;
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
     const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
 
-    if (needsSearch) {
-      const firstGemini = cascade[0];
+    if (needsSearch && client) {
+      const firstGemini = cascade.find(m => m.provider === 'gemini');
       if (firstGemini) {
         try {
           const response = await client.models.generateContent({
@@ -472,7 +673,41 @@ ${config.policyText}`;
     }
 
     for (const target of cascade) {
+      if (!this.isProviderConfigured(target.provider)) {
+        continue;
+      }
+
       const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
+
+      if (target.provider === 'openrouter' || target.provider === 'groq') {
+        try {
+          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, userText, persona);
+          const finalText = await this.streamOpenAICompatible(
+            target.provider,
+            target.id,
+            openAiMsgs,
+            temp,
+            async (accumulated) => {
+              await onProgress(accumulated, false, target);
+            }
+          );
+          if (finalText) {
+            storage.addChatMessage(userId, 'user', userText);
+            storage.addChatMessage(userId, 'model', finalText);
+            await onProgress(finalText, true, target);
+            return finalText;
+          }
+        } catch (extStreamErr: any) {
+          storage.addLog(
+            'gemini',
+            `Model (${target.id}) canlı axın cəhdi: ${extStreamErr?.message || extStreamErr}. Kaskad davam edir.`
+          );
+        }
+        continue;
+      }
+
+      if (!client) continue;
+
       try {
         const responseStream = await client.models.generateContentStream({
           model: target.id,
@@ -518,7 +753,8 @@ ${config.policyText}`;
     modelOverride?: string
   ): Promise<string> {
     const client = this.ai || this.initClient();
-    if (!client) {
+    const providerStatus = this.getProviderStatus();
+    if (!providerStatus.gemini && !providerStatus.openrouter && !providerStatus.groq) {
       return 'Məlumat hazırlandı.';
     }
 
@@ -538,6 +774,27 @@ ${config.policyText}`;
     const needsSearch = this.shouldSearchWeb(prompt);
 
     for (const target of cascade) {
+      if (!this.isProviderConfigured(target.provider)) continue;
+
+      if (target.provider === 'openrouter' || target.provider === 'groq') {
+        try {
+          const txt = await this.callOpenAICompatible(
+            target.provider,
+            target.id,
+            [
+              { role: 'system', content: instruction },
+              { role: 'user', content: prompt }
+            ],
+            0.3
+          );
+          if (txt) return txt;
+        } catch (err: any) {
+          storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${err?.message || err}`);
+        }
+        continue;
+      }
+
+      if (!client) continue;
       try {
         const response = await client.models.generateContent({
           model: target.id,

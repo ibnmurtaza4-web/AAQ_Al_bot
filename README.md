@@ -1,6 +1,6 @@
 # AAQ - Ahl Al Qalam (AAQ Əhl-ül Qələm) Telegram Bot & Web Engine
 
-Müxtəlif süni intellekt modelləri (Google Gemini Flash) ilə təchiz olunmuş, Telegram qruplarını idarə edən, PDF sənədlərini analiz edən, 24/7 Webhook ilə oyaq qalan və canlı Veb İdarəetmə Panelinə malik çoxfunksiyalı sistem.
+Müxtəlif süni intellekt modelləri (Google Gemini, DeepSeek R1/V3, Meta Llama 3.3, Qwen 2.5, Groq LPU) ilə təchiz olunmuş, Telegram qruplarını idarə edən, PDF sənədlərini analiz edən, 24/7 Hibrid Webhook + Watchdog ilə oyaq qalan və canlı Veb İdarəetmə Panelinə malik çoxfunksiyalı sistem.
 
 Rəsmi Təşkilat Kanalı: [t.me/AAQ_Offical](https://t.me/AAQ_Offical)
 
@@ -8,18 +8,20 @@ Rəsmi Təşkilat Kanalı: [t.me/AAQ_Offical](https://t.me/AAQ_Offical)
 
 ## 🌟 Əsas Xüsusiyyətlər
 
-### 1. ⚡ Sürətli Süni İntellekt (Gemini Flash Engine)
-- **Modellər:** `gemini-3.8-flash` (Defolt), `gemini-2.5-flash`, `gemini-3.7-flash`, `gemini-3.1-flash-lite`, `gemini-flash-latest`.
-- **İtiksiz Kaskad (Auto-Failover):** Hər hansı modeldə 503 yüklənməsi yarandıqda sistem dərhal digər aktiv Gemini Flash modelinə keçir.
+### 1. ⚡ Çoxmühərrikli Süni İntellekt (Multi-Provider AI Engine)
+- **Google Gemini Modelləri:** `gemini-3.8-flash` (Defolt), `gemini-2.5-flash`, `gemini-3.7-flash`, `gemini-3.1-flash-lite`, `gemini-flash-latest`.
+- **OpenRouter Modelləri:** `DeepSeek R1`, `DeepSeek V3`, `Llama 3.3 70B`, `Qwen 2.5 72B`.
+- **Groq LPU Modelləri:** `Groq Llama 3.3 70B`, `Groq DeepSeek R1 70B`.
+- **İtiksiz Kaskad (Auto-Failover):** Hər hansı modeldə yüklənmə və ya xəta yarandıqda sistem dərhal digər aktiv modelə keçir.
 - **Dərin Xarakter İmmersiyası:** Müdrik Filosof, Baş Proqramçı, DİM Eksperti, Kiberpunk 2077, Səmimi Dost və Xarici Dil Müəllimi.
 
 ### 2. 📄 Ağıllı PDF Sənəd Analizi
 - **Şəxsi İstifadə Rejimi:** Qruplara atılan PDF-lərin avtomatik işə düşməsi və qrupu narahat etməsi ləğv edilib. PDF analizi **yalnız şəxsi söhbətlərdə** işləyir.
 - **Dərin Analiz:** Multimodal mühərrik vasitəsilə mətni çıxarır, strukturu xülasələşdirir və sualları cavablandırır.
 
-### 3. ⚡ 24/7 Oyaq Qalma (Keep-Alive 2.0 & Polling Watchdog)
-- **Telegram Webhook & Watchdog:** Bulud mühiti yuxuya getdikdə `/api/wake` və ya Webhook vasitəsilə oyanır, Watchdog isə hər 45 saniyədən bir polling döngüsünü nəzarətdə saxlayır.
-- **Daxili Nabız (Keep-Alive):** Hər 2 dəqiqədən bir server daxili `/api/health` ünvanını yoxlayaraq prosesin aktivliyini təmin edir.
+### 3. ⚡ 24/7 Oyaq Qalma (Keep-Alive 2.0 & Ağıllı Hibrid Webhook)
+- **Ağıllı Telegram Webhook:** İctimai HTTPS ünvanını avtomatik yoxlayır (`max_connections: 40`), serveri anında oyadır və xəta olduqda mesaj itkisi olmaması üçün Polling rejiminə ehtiyat keçid edir.
+- **30s Watchdog & 180s Socket Keep-Alive:** HTTP TCP Keep-Alive vaxtı 180 saniyəyə qədər uzadılıb; Watchdog hər 30 saniyədən bir həm bot bağlantısını, həm də webhook sağlamlığını nəzarətdə saxlayır.
 
 ### 4. 🛡️ Qrup Qoruma & Moderasiya
 - **Anti-Söyüş (Profanity Filter):** Azərbaycan, rus və ingilis dillərində qeyri-etik sözləri aşkar edir və avtomatik silir.
@@ -41,6 +43,8 @@ Bu layihədə bütün gizli açarlar koddan tam təcrid edilib. Reponun və ya s
 | :--- | :--- | :--- |
 | `BOT_TOKEN` | Telegram BotFather tokeni | `1234567890:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `GEMINI_API_KEY` | Google Gemini AI Model Açarı | `AIzaSy...` |
+| `OPENROUTER_API_KEY` | OpenRouter Model Açarı (DeepSeek, Llama, Qwen) | `sk-or-...` |
+| `GROQ_API_KEY` | Groq LPU Model Açarı (Llama 3.3, DeepSeek R1) | `gsk_...` |
 | `ADMIN_SECRET_KEY`| AAQ İdarə Paneli və Admin Parolu | `your_secret_admin_key` |
 | `APP_URL` | Serverin canlı HTTPS ünvanı (Webhook üçün) | `https://your-domain.run.app` |
 | `OWNER_USERNAME` | Baş Rəhbərin Telegram istifadəçi adı | `your_telegram_username` |

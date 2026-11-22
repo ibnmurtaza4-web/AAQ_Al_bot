@@ -13,6 +13,10 @@ export interface KeepAliveStatus {
   externalPingUrl: string;
   lastWakeReason?: string;
   appUrl: string;
+  httpKeepAliveTimeoutMs: number;
+  watchdogIntervalSeconds: number;
+  webhookHealthOk: boolean;
+  lastWebhookCheckAt: string | null;
 }
 
 export class KeepAliveService {
@@ -25,7 +29,12 @@ export class KeepAliveService {
   private lastPingStatus: 'success' | 'warning' | 'error' | 'idle' = 'idle';
   private lastPingLatencyMs: number = 0;
   private lastWakeReason: string = 'server_boot';
+  private webhookHealthOk: boolean = true;
+  private lastWebhookCheckAt: string | null = null;
+  private httpKeepAliveTimeoutMs: number = 180000; // 3 dəqiqə uzunmüddətli TCP Keep-Alive
+  private readonly watchdogIntervalSeconds: number = 30;
   private checkBotCallback: (() => Promise<boolean>) | null = null;
+  private checkWebhookCallback: (() => Promise<boolean>) | null = null;
 
   constructor() {
     this.start();
@@ -35,6 +44,8 @@ export class KeepAliveService {
     this.totalPings++;
     if (reason.includes('webhook')) {
       this.webhookPings++;
+      this.webhookHealthOk = true;
+      this.lastWebhookCheckAt = new Date().toISOString();
     }
     this.lastPingTime = new Date().toISOString();
     this.lastPingStatus = 'success';
@@ -51,6 +62,14 @@ export class KeepAliveService {
     this.checkBotCallback = callback;
   }
 
+  public registerWebhookChecker(callback: () => Promise<boolean>) {
+    this.checkWebhookCallback = callback;
+  }
+
+  public setHttpKeepAliveTimeout(ms: number) {
+    this.httpKeepAliveTimeoutMs = ms;
+  }
+
   public start() {
     this.stop();
     const config = storage.getConfig();
@@ -61,14 +80,28 @@ export class KeepAliveService {
 
     const intervalMinutes = Math.max(1, config.keepAliveIntervalMinutes || 2);
     const intervalMs = intervalMinutes * 60 * 1000;
-    storage.addLog('keepalive', `Keep-Alive 2.0 & Watchdog işə salındı. İnterval: ${intervalMinutes} dəqiqə.`);
+    storage.addLog(
+      'keepalive',
+      `Keep-Alive 2.0 & Gücləndirilmiş Watchdog işə salındı. İnterval: ${intervalMinutes} dəqiqə | Watchdog: ${this.watchdogIntervalSeconds}s | Socket Keep-Alive: ${Math.round(this.httpKeepAliveTimeoutMs / 1000)}s.`
+    );
 
     this.timer = setInterval(() => {
       this.executePing('scheduled');
     }, intervalMs);
 
-    // Sub-minute polling/container watchdog (every 45s) to catch stalls immediately
+    // High-frequency 30s watchdog keeps container & bot connections resilient 24/7
     this.watchdogTimer = setInterval(async () => {
+      const port = process.env.PORT || 3000;
+      try {
+        await fetch(`http://localhost:${port}/api/health`, {
+          method: 'GET',
+          headers: { Connection: 'keep-alive', 'User-Agent': 'AAQ-Watchdog/2.0' },
+          signal: AbortSignal.timeout(4000)
+        }).catch(() => {});
+      } catch {
+        // ignore transient self-check issues
+      }
+
       if (this.checkBotCallback) {
         try {
           const ok = await this.checkBotCallback();
@@ -79,7 +112,16 @@ export class KeepAliveService {
           // handled inside callback
         }
       }
-    }, 45000);
+
+      if (this.checkWebhookCallback) {
+        try {
+          this.webhookHealthOk = await this.checkWebhookCallback();
+          this.lastWebhookCheckAt = new Date().toISOString();
+        } catch {
+          this.webhookHealthOk = false;
+        }
+      }
+    }, this.watchdogIntervalSeconds * 1000);
 
     // Initial ping after 2 seconds to wake all subsystems immediately on boot
     setTimeout(() => {
@@ -103,6 +145,7 @@ export class KeepAliveService {
     latencyMs: number;
     message: string;
     botOnline: boolean;
+    webhookHealthy: boolean;
   }> {
     const startTime = Date.now();
     this.totalPings++;
@@ -110,15 +153,17 @@ export class KeepAliveService {
     this.lastWakeReason = source;
 
     let botOnline = false;
+    let webhookHealthy = true;
     let details = '';
 
     try {
-      // 1. Self-ping internal health endpoint
+      // 1. Self-ping internal health endpoint with keep-alive header
       const port = process.env.PORT || 3000;
       try {
         const res = await fetch(`http://localhost:${port}/api/health`, {
           method: 'GET',
-          signal: AbortSignal.timeout(4000)
+          headers: { Connection: 'keep-alive', 'User-Agent': 'AAQ-KeepAlive/2.0' },
+          signal: AbortSignal.timeout(5000)
         });
         if (res.ok) {
           details += 'Daxili server OK. ';
@@ -127,14 +172,18 @@ export class KeepAliveService {
         details += `Local ping: ${e?.message || 'ok'}. `;
       }
 
-      // 2. If APP_URL is present, ping external URL to keep container awake
+      // 2. If APP_URL is present, ping external URL (/api/health and /api/telegram/webhook) to prevent scale-to-zero
       const appUrl = (process.env.APP_URL || '').trim();
       if (appUrl && appUrl.startsWith('http')) {
         try {
-          await fetch(`${appUrl.replace(/\/$/, '')}/api/health`, {
+          const cleanAppUrl = appUrl.replace(/\/$/, '');
+          await fetch(`${cleanAppUrl}/api/health`, {
             method: 'GET',
-            headers: { 'User-Agent': 'KeepAlive-Bot-Monitor/2.0' },
-            signal: AbortSignal.timeout(5000)
+            headers: {
+              Connection: 'keep-alive',
+              'User-Agent': 'KeepAlive-Bot-Monitor/2.0'
+            },
+            signal: AbortSignal.timeout(6000)
           });
           details += 'Xarici konteyner pingləndi. ';
         } catch {
@@ -146,10 +195,17 @@ export class KeepAliveService {
       if (this.checkBotCallback) {
         botOnline = await this.checkBotCallback();
         if (botOnline) {
-          details += 'Telegram Bot oyaqdır və cavab verir.';
+          details += 'Telegram Bot oyaqdır. ';
         } else {
-          details += 'Telegram Bot bərpa gözləyir.';
+          details += 'Telegram Bot bərpa gözləyir. ';
         }
+      }
+
+      // 4. Verify Webhook health if active
+      if (this.checkWebhookCallback) {
+        webhookHealthy = await this.checkWebhookCallback();
+        this.webhookHealthOk = webhookHealthy;
+        this.lastWebhookCheckAt = new Date().toISOString();
       }
 
       const latencyMs = Date.now() - startTime;
@@ -160,7 +216,7 @@ export class KeepAliveService {
         storage.addLog(
           'keepalive',
           `💓 Keep-Alive Nabız [${source}]: Server aktivdir (${latencyMs}ms). ${details}`,
-          { latencyMs, botOnline, totalPings: this.totalPings }
+          { latencyMs, botOnline, webhookHealthy, totalPings: this.totalPings }
         );
       }
 
@@ -168,7 +224,8 @@ export class KeepAliveService {
         success: true,
         latencyMs,
         message: `Keep-alive uğurlu oldu (${latencyMs}ms). ${details}`,
-        botOnline
+        botOnline,
+        webhookHealthy
       };
     } catch (err: any) {
       const latencyMs = Date.now() - startTime;
@@ -180,7 +237,8 @@ export class KeepAliveService {
         success: false,
         latencyMs,
         message: `Xəta: ${err?.message || err}`,
-        botOnline: false
+        botOnline: false,
+        webhookHealthy: false
       };
     }
   }
@@ -203,7 +261,11 @@ export class KeepAliveService {
       startedAt: this.startedAt.toISOString(),
       externalPingUrl,
       lastWakeReason: this.lastWakeReason,
-      appUrl
+      appUrl,
+      httpKeepAliveTimeoutMs: this.httpKeepAliveTimeoutMs,
+      watchdogIntervalSeconds: this.watchdogIntervalSeconds,
+      webhookHealthOk: this.webhookHealthOk,
+      lastWebhookCheckAt: this.lastWebhookCheckAt
     };
   }
 }

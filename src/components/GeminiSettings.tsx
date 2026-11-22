@@ -27,35 +27,88 @@ const DEFAULT_MODELS_LIST: ModelDefinition[] = [
     name: '🔵 Gemini 3.8 Flash ⚡ (Ən Son Nəsil)',
     description: 'Ən yeni bilik bazası, real vaxt təqvim/axtarış anlayışı və sürətli reaksiya',
     speed: 'Ultra Sürətli (~0.3s)',
+    provider: 'gemini',
     isDefault: true
   },
   {
     id: 'gemini-2.5-flash',
     alias: 'Gemini 2.5 Flash',
     name: '🔵 Gemini 2.5 Flash ⚡ (Yüksək Sabitlik)',
-    description: '503 yüklənmələrinə qarşı ən stabil, etibarlı və səlis Google Flash modeli',
-    speed: 'Sürətli (~0.3s)'
+    description: 'Yüklənmələrə qarşı ən stabil, etibarlı və səlis Google Flash modeli',
+    speed: 'Sürətli (~0.3s)',
+    provider: 'gemini'
   },
   {
     id: 'gemini-3.7-flash',
     alias: 'Gemini 3.7 Flash',
     name: '🟣 Gemini 3.7 Flash 🌟',
     description: 'Hibrid düşüncə, geniş kontekst və zəngin bilik bazası',
-    speed: 'Sürətli (~0.4s)'
+    speed: 'Sürətli (~0.4s)',
+    provider: 'gemini'
   },
   {
     id: 'gemini-3.1-flash-lite',
     alias: 'Gemini 3.1 Flash Lite',
     name: '🟢 Gemini 3.1 Flash Lite 🚀',
     description: 'Operativ reaksiya, minimum gecikmə və kəsintisiz iş',
-    speed: 'İldırım Sürəti (~0.2s)'
+    speed: 'İldırım Sürəti (~0.2s)',
+    provider: 'gemini'
   },
   {
     id: 'gemini-flash-latest',
     alias: 'Gemini Flash Latest',
     name: '🟡 Gemini Flash Latest 💡',
-    description: 'Daim yenilənən sabit Flash modeli',
-    speed: 'Sürətli (~0.3s)'
+    description: 'Daim yenilənən sabit Google Flash modeli',
+    speed: 'Sürətli (~0.3s)',
+    provider: 'gemini'
+  },
+  {
+    id: 'deepseek/deepseek-r1:free',
+    alias: 'DeepSeek R1',
+    name: '🟣 DeepSeek R1 🧠 (Dərin Mühakimə)',
+    description: 'Mürəkkəb riyazi, məntiqi və elmi tədqiqat sualları üçün dərin analitik model',
+    speed: 'Analitik (~1.2s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'deepseek/deepseek-chat:free',
+    alias: 'DeepSeek V3',
+    name: '🟣 DeepSeek V3 🌌 (Akademik Analiz)',
+    description: 'Geniş erudisiya, yüksək ədəbi ifadə və proqramlaşdırma qabiliyyəti',
+    speed: 'Sürətli (~0.7s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'meta-llama/llama-3.3-70b-instruct:free',
+    alias: 'Llama 3.3 70B',
+    name: '🟣 Llama 3.3 70B 🏛️ (Meta AI)',
+    description: '70 milyard parametrli güclü çoxdilli akademik və ümumi bilik modeli',
+    speed: 'Sürətli (~0.6s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'qwen/qwen-2.5-72b-instruct:free',
+    alias: 'Qwen 2.5 72B',
+    name: '🟠 Qwen 2.5 72B 📜 (Alibaba Cloud)',
+    description: 'Dəqiq mətn analizi, məntiqi nəticə və çoxdilli tərcümə imkanları',
+    speed: 'Sürətli (~0.6s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'llama-3.3-70b-versatile',
+    alias: 'Groq Llama 3.3 70B',
+    name: '🟢 Groq Llama 3.3 70B ⚡ (LPU Sürəti)',
+    description: 'Groq LPU prosessoru üzərində ani reaksiya verən 70B intellektual model',
+    speed: 'Hiper Sürət (~0.2s)',
+    provider: 'groq'
+  },
+  {
+    id: 'deepseek-r1-distill-llama-70b',
+    alias: 'Groq DeepSeek R1 70B',
+    name: '🟢 Groq DeepSeek R1 70B 🚀 (Hiper Analiz)',
+    description: 'DeepSeek R1 zəkası ilə Groq LPU sürətinin birləşməsi',
+    speed: 'Hiper Sürət (~0.3s)',
+    provider: 'groq'
   }
 ];
 
@@ -115,8 +168,8 @@ export const GeminiSettings: React.FC<GeminiSettingsProps> = ({
         <div className="flex items-center gap-2.5">
           <Sparkles className="w-5 h-5 text-indigo-400" />
           <div>
-            <h2 className="text-sm font-semibold text-white">Google Gemini AI & Dərin Personaj İdarəetməsi</h2>
-            <p className="text-xs text-slate-400">AAQ Telegram botunuzun beyni və model seçimini buradan idarə edin</p>
+            <h2 className="text-sm font-semibold text-white">Çoxmühərrikli AI & Dərin Personaj İdarəetməsi</h2>
+            <p className="text-xs text-slate-400">AAQ Telegram botunuzun beyni, aktiv modelləri və xarakterini buradan idarə edin</p>
           </div>
         </div>
 
@@ -141,7 +194,7 @@ export const GeminiSettings: React.FC<GeminiSettingsProps> = ({
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
             <Cpu className="w-5 h-5 text-purple-400" />
-            <h3 className="text-sm font-semibold text-white">Google Gemini Modelləri Kataloqu</h3>
+            <h3 className="text-sm font-semibold text-white">AI Modelləri Kataloqu (Gemini, DeepSeek, Llama, Qwen, Groq)</h3>
           </div>
           <span className="text-xs text-cyan-400 font-mono">
             Aktiv Model: {activeModelList.find(m => m.id === selectedModel)?.alias || selectedModel}
@@ -151,6 +204,19 @@ export const GeminiSettings: React.FC<GeminiSettingsProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {activeModelList.map((m) => {
             const isSelected = selectedModel === m.id;
+            const providerLabel =
+              m.provider === 'openrouter'
+                ? 'OpenRouter'
+                : m.provider === 'groq'
+                  ? 'Groq LPU'
+                  : 'Google Gemini';
+            const providerBadgeClass =
+              m.provider === 'openrouter'
+                ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
+                : m.provider === 'groq'
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                  : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20';
+
             return (
               <div
                 key={m.id}
@@ -162,10 +228,15 @@ export const GeminiSettings: React.FC<GeminiSettingsProps> = ({
                 }`}
               >
                 <div className="flex items-center justify-between mb-2 gap-2">
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-indigo-500/10 text-indigo-300 border-indigo-500/20 font-mono">
-                    {m.speed}
-                  </span>
-                  {isSelected && <Check className="w-4 h-4 text-indigo-400" />}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border font-mono ${providerBadgeClass}`}>
+                      {providerLabel}
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-indigo-500/10 text-indigo-300 border-indigo-500/20 font-mono">
+                      {m.speed}
+                    </span>
+                  </div>
+                  {isSelected && <Check className="w-4 h-4 text-indigo-400 flex-shrink-0" />}
                 </div>
                 <h4 className="text-xs font-bold text-white font-mono">{m.name}</h4>
                 <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">{m.description}</p>

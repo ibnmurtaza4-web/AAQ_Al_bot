@@ -94,6 +94,7 @@ export interface BotConfig {
   pollingEnabled: boolean;
   connectionMode?: 'webhook' | 'polling';
   webhookUrl?: string;
+  webhookSecret?: string;
   fastAiMode?: boolean;
 }
 
@@ -103,6 +104,7 @@ export interface ModelDefinition {
   name: string;
   description: string;
   speed: string;
+  provider: 'gemini' | 'openrouter' | 'groq';
   isDefault?: boolean;
 }
 
@@ -113,35 +115,88 @@ export const AVAILABLE_MODELS: ModelDefinition[] = [
     name: '🔵 Gemini 3.8 Flash ⚡ (Ən Son Nəsil)',
     description: 'Ən yeni bilik bazası, real vaxt təqvim/axtarış anlayışı və sürətli reaksiya',
     speed: 'Ultra Sürətli (~0.3s)',
+    provider: 'gemini',
     isDefault: true
   },
   {
     id: 'gemini-2.5-flash',
     alias: 'Gemini 2.5 Flash',
     name: '🔵 Gemini 2.5 Flash ⚡ (Yüksək Sabitlik)',
-    description: '503 yüklənmələrinə qarşı ən stabil, etibarlı və səlis Google Flash modeli',
-    speed: 'Sürətli (~0.3s)'
+    description: 'Yüklənmələrə qarşı ən stabil, etibarlı və səlis Google Flash modeli',
+    speed: 'Sürətli (~0.3s)',
+    provider: 'gemini'
   },
   {
     id: 'gemini-3.7-flash',
     alias: 'Gemini 3.7 Flash',
     name: '🟣 Gemini 3.7 Flash 🌟',
     description: 'Hibrid düşüncə, geniş kontekst və zəngin bilik bazası',
-    speed: 'Sürətli (~0.4s)'
+    speed: 'Sürətli (~0.4s)',
+    provider: 'gemini'
   },
   {
     id: 'gemini-3.1-flash-lite',
     alias: 'Gemini 3.1 Flash Lite',
     name: '🟢 Gemini 3.1 Flash Lite 🚀',
     description: 'Operativ reaksiya, minimum gecikmə və kəsintisiz iş',
-    speed: 'İldırım Sürəti (~0.2s)'
+    speed: 'İldırım Sürəti (~0.2s)',
+    provider: 'gemini'
   },
   {
     id: 'gemini-flash-latest',
     alias: 'Gemini Flash Latest',
     name: '🟡 Gemini Flash Latest 💡',
-    description: 'Daim yenilənən sabit Flash modeli',
-    speed: 'Sürətli (~0.3s)'
+    description: 'Daim yenilənən sabit Google Flash modeli',
+    speed: 'Sürətli (~0.3s)',
+    provider: 'gemini'
+  },
+  {
+    id: 'deepseek/deepseek-r1:free',
+    alias: 'DeepSeek R1',
+    name: '🟣 DeepSeek R1 🧠 (Dərin Mühakimə)',
+    description: 'Mürəkkəb riyazi, məntiqi və elmi tədqiqat sualları üçün dərin analitik model',
+    speed: 'Analitik (~1.2s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'deepseek/deepseek-chat:free',
+    alias: 'DeepSeek V3',
+    name: '🟣 DeepSeek V3 🌌 (Akademik Analiz)',
+    description: 'Geniş erudisiya, yüksək ədəbi ifadə və proqramlaşdırma qabiliyyəti',
+    speed: 'Sürətli (~0.7s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'meta-llama/llama-3.3-70b-instruct:free',
+    alias: 'Llama 3.3 70B',
+    name: '🟣 Llama 3.3 70B 🏛️ (Meta AI)',
+    description: '70 milyard parametrli güclü çoxdilli akademik və ümumi bilik modeli',
+    speed: 'Sürətli (~0.6s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'qwen/qwen-2.5-72b-instruct:free',
+    alias: 'Qwen 2.5 72B',
+    name: '🟠 Qwen 2.5 72B 📜 (Alibaba Cloud)',
+    description: 'Dəqiq mətn analizi, məntiqi nəticə və çoxdilli tərcümə imkanları',
+    speed: 'Sürətli (~0.6s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'llama-3.3-70b-versatile',
+    alias: 'Groq Llama 3.3 70B',
+    name: '🟢 Groq Llama 3.3 70B ⚡ (LPU Sürəti)',
+    description: 'Groq LPU prosessoru üzərində ani reaksiya verən 70B intellektual model',
+    speed: 'Hiper Sürət (~0.2s)',
+    provider: 'groq'
+  },
+  {
+    id: 'deepseek-r1-distill-llama-70b',
+    alias: 'Groq DeepSeek R1 70B',
+    name: '🟢 Groq DeepSeek R1 70B 🚀 (Hiper Analiz)',
+    description: 'DeepSeek R1 zəkası ilə Groq LPU sürətinin birləşməsi',
+    speed: 'Hiper Sürət (~0.3s)',
+    provider: 'groq'
   }
 ];
 
@@ -214,6 +269,7 @@ const DEFAULT_CONFIG: BotConfig = {
   pollingEnabled: true,
   connectionMode: 'polling',
   webhookUrl: '',
+  webhookSecret: '',
   fastAiMode: true
 };
 

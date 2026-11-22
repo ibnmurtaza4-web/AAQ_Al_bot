@@ -164,18 +164,18 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
     const url = webhookInput.trim() || undefined;
     const res = await onSetupWebhook(url);
     if (res?.success) {
-      setWebhookActionMsg('Webhook uğurla aktivləşdirildi! Telegram artıq konteyneri 24/7 oyadacaq.');
+      setWebhookActionMsg(res.message || 'Webhook uğurla aktivləşdirildi! Telegram artıq konteyneri 24/7 oyadacaq.');
     } else {
       setWebhookActionMsg(res?.message || 'Webhook quraşdırılmadı');
     }
-    setTimeout(() => setWebhookActionMsg(null), 4000);
+    setTimeout(() => setWebhookActionMsg(null), 6000);
   };
 
   const handleSwitchToPolling = async () => {
     if (!onRemoveWebhook) return;
     const res = await onRemoveWebhook();
     if (res?.success) {
-      setWebhookActionMsg('Polling rejiminə keçildi.');
+      setWebhookActionMsg('Polling + 30s Watchdog rejiminə keçildi.');
     } else {
       setWebhookActionMsg(res?.message || 'Polling rejiminə keçid uğursuz oldu');
     }
@@ -777,23 +777,26 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
           </div>
 
           <p className="text-xs text-slate-400 leading-relaxed">
-            Daxili avtomatik keep-alive xidməti hər <strong className="text-cyan-300">{config?.keepAliveIntervalMinutes || 5} dəqiqədən</strong> bir serverə və Telegram API-yə sorğular göndərərək botun fasiləsiz işləməsini təmin edir.
+            Daxili gücləndirilmiş keep-alive və <strong className="text-emerald-300">30s Watchdog</strong> xidməti hər <strong className="text-cyan-300">{config?.keepAliveIntervalMinutes || 2} dəqiqədən</strong> bir serverə və Telegram API-yə sorğular göndərərək ({Math.round((status?.keepAlive?.httpKeepAliveTimeoutMs || 180000) / 1000)}s TCP socket keep-alive ilə) botun fasiləsiz işləməsini təmin edir.
           </p>
 
           {/* Keep-Alive Settings */}
           <div className="grid grid-cols-2 gap-3 pt-1">
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-              <span className="text-[11px] text-slate-500 block">Daxili İnterval</span>
+              <span className="text-[11px] text-slate-500 block">Nabız İntervalı (Müddət)</span>
               <div className="flex items-center gap-2 mt-1">
                 <select
-                  value={config?.keepAliveIntervalMinutes || 5}
+                  value={config?.keepAliveIntervalMinutes || 2}
                   onChange={(e) => onUpdateConfig({ keepAliveIntervalMinutes: parseInt(e.target.value, 10) })}
                   className="bg-transparent text-sm font-semibold text-white focus:outline-none cursor-pointer"
                 >
-                  <option value="1" className="bg-slate-900">Hər 1 dəqiqə</option>
-                  <option value="3" className="bg-slate-900">Hər 3 dəqiqə</option>
-                  <option value="5" className="bg-slate-900">Hər 5 dəqiqə (Tövsiyə)</option>
+                  <option value="1" className="bg-slate-900">Hər 1 dəqiqə (Maksimum)</option>
+                  <option value="2" className="bg-slate-900">Hər 2 dəqiqə (Tövsiyə)</option>
+                  <option value="5" className="bg-slate-900">Hər 5 dəqiqə</option>
                   <option value="10" className="bg-slate-900">Hər 10 dəqiqə</option>
+                  <option value="15" className="bg-slate-900">Hər 15 dəqiqə (Uzun)</option>
+                  <option value="30" className="bg-slate-900">Hər 30 dəqiqə (Uzadılmış)</option>
+                  <option value="60" className="bg-slate-900">Hər 60 dəqiqə (Saatlıq)</option>
                 </select>
               </div>
             </div>

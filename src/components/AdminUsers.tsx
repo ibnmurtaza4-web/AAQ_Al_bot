@@ -130,11 +130,14 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({
     }
   };
 
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const handleReplyTicketSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTicket || !ticketReplyText.trim()) return;
 
     setTicketReplyLoading(true);
+    setActionError(null);
     try {
       const ok = await onReplyToTicket(selectedTicket.id, ticketReplyText.trim());
       if (ok) {
@@ -143,7 +146,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({
         onRefreshData();
       }
     } catch (err: any) {
-      alert(`Cavab göndərilmədi: ${err?.message || err}`);
+      setActionError(`Cavab göndərilmədi: ${err?.message || err}`);
     } finally {
       setTicketReplyLoading(false);
     }
@@ -155,12 +158,13 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({
 
     setBroadcastLoading(true);
     setBroadcastResult(null);
+    setActionError(null);
     try {
       const result = await onSendBroadcast(broadcastText.trim(), broadcastTargetType);
       setBroadcastResult(result);
       setBroadcastText('');
     } catch (err: any) {
-      alert(`Elan göndərilmədi: ${err?.message || err}`);
+      setActionError(`Elan göndərilmədi: ${err?.message || err}`);
     } finally {
       setBroadcastLoading(false);
     }
@@ -170,6 +174,14 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({
 
   return (
     <div className="space-y-6">
+      {actionError && (
+        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between">
+          <span>{actionError}</span>
+          <button type="button" onClick={() => setActionError(null)} className="text-rose-400 hover:text-white font-bold ml-2">
+            ×
+          </button>
+        </div>
+      )}
       
       {/* Top Split: Broadcast Elan Studio + Admin Authorization Key */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -18,6 +18,10 @@ export interface KeepAliveStatus {
   externalPingUrl: string;
   lastWakeReason?: string;
   appUrl?: string;
+  httpKeepAliveTimeoutMs?: number;
+  watchdogIntervalSeconds?: number;
+  webhookHealthOk?: boolean;
+  lastWebhookCheckAt?: string | null;
 }
 
 export interface TelegramUser {
@@ -67,6 +71,7 @@ export interface ModelDefinition {
   name: string;
   description: string;
   speed: string;
+  provider?: 'gemini' | 'openrouter' | 'groq';
   isDefault?: boolean;
 }
 
@@ -108,6 +113,7 @@ export interface BotConfig {
   pollingEnabled: boolean;
   connectionMode?: 'webhook' | 'polling';
   webhookUrl?: string;
+  webhookSecret?: string;
   fastAiMode?: boolean;
 }
 
@@ -115,6 +121,11 @@ export interface AppStatus {
   botRunning: boolean;
   botInfo: BotInfo | null;
   hasGeminiApiKey: boolean;
+  providerKeys?: {
+    gemini: boolean;
+    openrouter: boolean;
+    groq: boolean;
+  };
   selectedModel: string;
   roleplayMode: string;
   totalUsers: number;

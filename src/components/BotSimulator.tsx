@@ -49,6 +49,14 @@ export const BotSimulator: React.FC<BotSimulatorProps> = ({
   const [selectedModel, setSelectedModel] = useState(activeModel);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
+  React.useEffect(() => {
+    setSelectedPersona(activePersona);
+  }, [activePersona]);
+
+  React.useEffect(() => {
+    setSelectedModel(activeModel);
+  }, [activeModel]);
+
   const quickCommands = [
     { label: '📖 /sozluk maarif', cmd: '/sozluk maarif' },
     { label: '🔢 /hesabla (150*12)/5 + 4^3', cmd: '/hesabla (150*12)/5 + 4^3' },
@@ -121,7 +129,7 @@ export const BotSimulator: React.FC<BotSimulatorProps> = ({
           {
             id: Math.random().toString(),
             sender: 'bot',
-            text: `⚠️ Cavab alına bilmədi: ${data.error || 'Gemini API xətası'}`,
+            text: `⚠️ Cavab alına bilmədi: ${data.error || 'AI API xətası'}`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           }
         ]);
@@ -156,7 +164,7 @@ export const BotSimulator: React.FC<BotSimulatorProps> = ({
             <div>
               <h3 className="text-xs font-bold text-white">AAQ Bot Canlı Dialoq Simulyatoru</h3>
               <p className="text-[11px] text-emerald-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Canlı Gemini Mühərriki
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Canlı Çoxmühərrikli AI
               </p>
             </div>
           </div>

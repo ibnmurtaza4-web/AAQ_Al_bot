@@ -148,7 +148,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {[
             { id: 'overview', label: 'İcmal & Nəzarət', icon: Bot },
             { id: 'admin', label: 'Admin, Qruplar & İstifadəçilər', icon: ShieldCheck },
-            { id: 'gemini', label: 'Gemini Modelləri & Təlimat', icon: Sparkles },
+            { id: 'gemini', label: 'AI Modellər & Təlimat', icon: Sparkles },
             { id: 'simulator', label: 'Bot Söhbət & Əmr Testi', icon: Send },
             { id: 'logs', label: 'Canlı Loqlar', icon: Activity },
             { id: 'keepalive', label: '24/7 Oyaq Qalma Mexanizmi', icon: RefreshCw },
