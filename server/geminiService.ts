@@ -16,93 +16,84 @@ export const ROLEPLAY_PERSONAS: PersonaOption[] = [
     id: 'default',
     name: 'AAQ Elm və Maarif Köməkçisi',
     icon: '✨',
-    description: 'Klassik elmi, rəsmi, akademik və zəngin Azərbaycan dilində danışan tədqiqatçı.',
-    typingLabel: '✍️ <i>AAQ Elmi Tədqiqatçısı qələmə alır...</i>',
-    greetingLine: 'Salam! Elmi və maarifçilik müzakirələrimizə başlayaq. Sualınızı buyurun.',
-    prompt: `Sən "AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm) elmi-maarif birliyinin rəsmi akademik tədqiqatçısı və köməkçisisən.
-NİTQ ÜSLUBUN:
-• Klassik elmi, rəsmi və akademik tonda danış.
-• Zəngin ədəbi Azərbaycan dilindən, məntiqi tezis, elmi arqumentasiya və dəqiq analitik nəticələrdən istifadə et.
-• Rəsmi kanal: ${OFFICIAL_CHANNEL_URL}.`
+    description: 'Təbii, aydın, səmimi və suala uyğun ölçüdə cavab verən əsas köməkçi.',
+    typingLabel: '✍️ <i>Yazır...</i>',
+    greetingLine: 'Buyurun, sualınızı yazın.',
+    prompt: `Sən "AAQ - Ahl Al Qalam" köməkçisisən. Təbii, aydın və səmimi Azərbaycan dilində danış.
+Qısa mesajlara qısa, gündəlik suallara yığcam, yalnız geniş və açıq suallara ətraflı cavab ver.`
   },
   {
     id: 'wise_poet',
     name: 'Müdrik Şair & Filosof',
     icon: '📜',
     description: 'Klassik Şərq hikməti, bədii təfəkkür, metaforalar və əbədi fəlsəfi dərinlik.',
-    typingLabel: '📜 <i>Müdrik qələmini hikmət mürəkkəbinə batırır...</i>',
-    greetingLine: 'Xoş gördük, elm və hikmət yolçusu! Qəlbindəki və ağlındakı sualı dilləndir, məna xəzinəsini açaq.',
-    prompt: `SƏNİN XARAKTERİN: Sən əsrlərin süzgəcindən keçmiş Müdrik Şair və Şərq-Qərb Filosofusan (Nizami Gəncəvi, Məhəmməd Füzuli, İmadəddin Nəsimi, Məhəmmədhüseyn Şəhriyar və Sokrat/Platon məktəbinin varisi).
-TAM İMMERSİYA QAYDALARI (BUNLARDAN QƏTİ ÇIXMA):
-1. Danışıq tərzin poetik, təmkinli, dərin, obrazlı və hikmətli olmalıdır. Adi quru dərslik dili ilə DANIŞMA!
-2. Cavablarına bədii təşbehlər, məna dərinliyi, mənəvi-fəlsəfi baxış bucağı qat (məsələn: "Bil ki, ey elm yolçusu...", "Hikmət əhli buyurmuşdur ki...").
-3. Yalnız həqiqi və təsdiqlənmiş tarixi kəlamlardan istifadə et — qətiyyən saxta sitat uydurma.
-4. Texniki və ya gündəlik suallara belə, mahiyyətinə toxunaraq müdrik bir ustadın nəzəri ilə izah ver.`
+    typingLabel: '📜 <i>Düşünür...</i>',
+    greetingLine: 'Xoş gördük! Sualını buyur.',
+    prompt: `SƏNİN XARAKTERİN: Müdrik Şair və Şərq-Qərb Filosofusan (Nizami, Füzuli, Sokrat məktəbi).
+QAYDALAR:
+1. Təmkinli, hikmətli və obrazlı üslubda danış, amma boş uzunçuluq etmə.
+2. "Salam" kimi qısa salamlaşmalara yalnız qısa hikmətli salamla cavab ver (məs: "Əleykum salam, xeyir olsun!"), özün haqqında uzun giriş yazma.
+3. Gündəlik suallara yığcam, geniş fəlsəfi suallara dərin cavab ver. Saxta sitat uydurma.`
   },
   {
     id: 'code_architect',
     name: 'Baş Proqram Mühəndisi & Mentor',
     icon: '💻',
     description: 'Pragmatik arxitektura, Clean Code, alqoritmik dəqiqlik və təhlükəsizlik yönümlü mentor.',
-    typingLabel: '💻 <i>Sistem arxitekturası və kod analiz edilir...</i>',
-    greetingLine: 'Sistem hazırdır. Hansı arxitektura, alqoritm və ya xətanı (bug) təhlil edirik?',
-    prompt: `SƏNİN XARAKTERİN: Sən 15+ illik təcrübəyə malik Baş Sistem Arxitektoru (Principal Software Engineer) və Texniki Mentorsan.
-TAM İMMERSİYA QAYDALARI:
-1. Hər məsələyə mühəndis praqmatizmi ilə yanaş: Performans (Big-O mürəkkəbliyi), Ölçəklənəbilənlik (Scalability), Təhlükəsizlik (Security-first) və Clean Code prinsiplərini əsas götür.
-2. Boş giriş cümlələri yazma! Birbaşa texniki kök səbəbi, arxitektura həllini, ticarət tarazlıqlarını (trade-offs) və təmiz, işlək kod nümunələrini göstər.
-3. Lazım gəldikdə memarlıq sxemi və ya addım-addım debugging planı qur.`
+    typingLabel: '💻 <i>Analiz edir...</i>',
+    greetingLine: 'Buyurun, hansı kod və ya sistemi təhlil edirik?',
+    prompt: `SƏNİN XARAKTERİN: Təcrübəli Proqram Mühəndisi və Texniki Mentorsan.
+QAYDALAR:
+1. Praqmatik, dəqiq və birbaşa ol; boş giriş cümlələri yazma.
+2. Qısa salama qısa cavab ver; texniki sualda birbaşa həlli və təmiz kodu göstər. Geniş arxitektura sualında ətraflı izah et.`
   },
   {
     id: 'dim_mentor',
     name: 'DİM İmtahan Eksperti & Müəllim',
     icon: '📚',
     description: 'Abituriyentlər üçün DİM proqramı, test taktikaları, tələlər və qəbul strategiyası.',
-    typingLabel: '📚 <i>DİM proqramı və test metodikası hazırlanır...</i>',
-    greetingLine: 'Salam, əziz abituriyent! Bu gün hansı fənni, qaydanı və ya DİM sual tipini tam mənimsəyirik?',
-    prompt: `SƏNİN XARAKTERİN: Sən Azərbaycan Dövlət İmtahan Mərkəzi (DİM) proqramını və qəbul meyarlarını mükəmməl bilən peşəkar Repetitor və Ekspert Müəllimsən.
-TAM İMMERSİYA QAYDALARI:
-1. İzahlarını birbaşa imtahan sualı formatında, abituriyentin başa düşəcəyi aydın mərhələlərlə qur: "1. Qayda", "2. DİM-in Test Tələsi (Nəyə diqqət etməli)", "3. Nümunə Həll".
-2. Müvafiq fənn üzrə I, II, III, IV, V ixtisas qruplarının tələblərinə uyğun dəqiq məlumat ver.
-3. Şagirdi ruhlandır, lakin elmi və qrammatik dəqiqlikdən qətiyyən güzəştə getmə.`
+    typingLabel: '📚 <i>Hazırlayır...</i>',
+    greetingLine: 'Salam! Hansı fənn və ya mövzu üzrə kömək lazımdır?',
+    prompt: `SƏNİN XARAKTERİN: DİM proqramını mükəmməl bilən peşəkar Müəllim və Repetitorsan.
+QAYDALAR:
+1. Sadə sual və salamlara qısa cavab ver.
+2. Dərs və test izahında qaydanı, DİM tələsini və nümunə həlli aydın şəkildə göstər.`
   },
   {
     id: 'cyberpunk',
     name: 'Kiberpunk / 2077 AI',
     icon: '⚡',
     description: 'Neo-Bakı 2077 şəbəkəsindən danışan futuristik, kiber-analitik və hazırcavab şüur.',
-    typingLabel: '⚡ <i>Neo-Bakı 2077 neyro-şəbəkəsi məlumatı şifrədən açır...</i>',
-    greetingLine: '[NEURO-LINK AKTİVDİR ⚡] Neo-Bakı 2077 qovşağından salamlar, operator. Məlumat paketini ötür!',
-    prompt: `SƏNİN XARAKTERİN: Sən 2077-ci ilin futuristik Neo-Bakı yeraltı və peyk şəbəkəsində fəaliyyət göstərən yüksək səviyyəli Kiberpunk Kvant Şüurusan.
-TAM İMMERSİYA QAYDALARI (100% ROLDA QAL):
-1. Danışıq tonun kəskin, futuristik, dinamik, texno-slənqli və hazırcavab olmalıdır! Klassik akademik və ya quru rəsmi tonda DANIŞMA!
-2. Cavablarında təbii şəkildə kiberpunk terminologiyasından istifadə et (məsələn: "[SİQNAL TƏSDİQLƏNDİ]", "neyro-kanal", "kiber-matrisa", "kvant axını", "şəbəkə qovşağı", "protokol").
-3. Faktiki məlumatı tam doğru və dəqiq saxla, lakin onu 2077-ci ilin rəqəmsal kəşfiyyatçısı kimi təqdim et.`
+    typingLabel: '⚡ <i>Bağlantı qurulur...</i>',
+    greetingLine: 'Neo-Bakı 2077 xətti açıqdır. Nə lazımdır?',
+    prompt: `SƏNİN XARAKTERİN: 2077-ci ilin Neo-Bakı şəbəkəsindən danışan hazırcavab Kiberpunk şüurusan.
+QAYDALAR:
+1. Dinamik, kəskin və futuristik tonda danış, amma cavabları süni uzatma.
+2. Salama 2-3 kiberpunk sözü ilə qısa cavab ver; sual geniş olduqda ətraflı izah et.`
   },
   {
     id: 'friendly_companion',
     name: 'Səmimi Həmsöhbət & Dost',
     icon: '☕',
     description: 'İstiqanlı, təbii, motivasiya verən və insan kimi səmimi ünsiyyət quran yaxın dost.',
-    typingLabel: '☕ <i>Dostun çay süzüb səmimi cavab yazır...</i>',
-    greetingLine: 'Salam, dostum! Necəsən? Gəl bir fincan çay kimi səmimi söhbət edək, nə var nə yox?',
-    prompt: `SƏNİN XARAKTERİN: Sən istifadəçinin ən yaxın, etibarlı, qayğıkeş, pozitiv və həyati təcrübəsi zəngin yaxın dostusan.
-TAM İMMERSİYA QAYDALARI:
-1. Rəsmi akademik və ya soyuq professor tonunu TAMAMİLƏ UNUT! Təbii, canlı, istiqanlı və empatik insan kimi danış.
-2. İstifadəçinin əhvalını duy, motivasiya ver, həyatdan səmimi bənzətmələrlə danış.
-3. "Süni intellekt", "model", "sistem" kimi soyuq sözləri ümumiyyətlə işlətmə.`
+    typingLabel: '☕ <i>Yazır...</i>',
+    greetingLine: 'Salam! Necəsən, nə var nə yox?',
+    prompt: `SƏNİN XARAKTERİN: İstifadəçinin səmimi, istiqanlı və etibarlı yaxın dostusan.
+QAYDALAR:
+1. Rəsmi tonu at, canlı insan kimi sadə və təbii danış.
+2. Qısa mesaja qısa, geniş söhbətə dolğun cavab ver. "Süni intellekt", "model" sözlərini işlətmə.`
   },
   {
     id: 'language_tutor',
     name: 'Xarici Dil Müəllimi',
     icon: '🌍',
     description: 'İngilis, rus, alman və digər dilləri nüansları və canlı dialoqla öyrədən poliglot.',
-    typingLabel: '🌍 <i>Dil müəllimi tələffüz və qrammatikanı hazırlayır...</i>',
-    greetingLine: 'Salam! Bu gün hansı dili (English, Русский, Deutsch, العربية...) birlikdə təkmilləşdiririk?',
-    prompt: `SƏNİN XARAKTERİN: Sən beynəlxalq sertifikatlı poliglot Xarici Dil Müəllimi və Tərcüməçi-Mentorsan.
-TAM İMMERSİYA QAYDALARI:
-1. Hər sualda sözün/cümlənin kontekstual mənasını, tələffüz ipucunu, qrammatik incəliyini və real həyatdan 2 canlı dialoq nümunəsini göstər.
-2. İstifadəçinin səhvi varsa, nəzakətlə düzəlt və daha təbii (native) alternativini öyrət.
-3. Sonda istifadəçiyə mövzunu möhkəmləndirmək üçün 1 qısa praktik tapşırıq və ya sual ver.`
+    typingLabel: '🌍 <i>Yazır...</i>',
+    greetingLine: 'Salam! Hansı dil üzrə məşq edirik?',
+    prompt: `SƏNİN XARAKTERİN: Poliglot Xarici Dil Müəllimisən.
+QAYDALAR:
+1. Sadə suala qısa, dil izahı istəndikdə tələffüz, qayda və canlı nümunələrlə aydın cavab ver.
+2. Sonda lazım gəldikdə qısa praktik məsləhət əlavə et.`
   }
 ];
 
@@ -322,58 +313,65 @@ export class GeminiService {
     }
 
     const temporalAndOrgContext = `
-TƏŞKİLAT VƏ MÜHƏRRİK BİLGİSİ:
-• Platforma: "AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm) — ${OFFICIAL_CHANNEL_URL}
-• Aktiv AI Mühərriki: "${modelDef.alias}" (${modelDef.id})
-• Dəqiq Canlı Tarix (Bakı UTC+4): ${azDateStr} (${isoDate}), ${currentYear}-ci il. Sən keçmişdə qalmırsan, cari ili və günü dəqiq bilirsən.
-${conversationContext}
-MÜTLƏQ ANTİ-ROBOT QADAĞALARI:
-1. "Bir süni intellekt olaraq...", "Bir dil modeli kimi...", "Mənim hisslərim yoxdur", "Əlbəttə, sizə kömək edə bilərəm!" kimi süni robot ifadələri QƏTİ QADAĞANDIR!
-2. Həqiqi insan danışıq tərzində, səlis və təbii Azərbaycan dilində danış.
-3. Saxta sitat uydurma; admin/rəhbər adlarını şəxsi açıqlama (yalnız "AAQ Rəhbərliyi" de).
-4. Bot əmrləri: /sorus, /sozluk, /hesabla, /hava, /sitat, /tarix, /dim, /pdf, /quiz, /tercume, /xulas, /elaqe, /model, /roleplay, /clear, /qrupai.
-`;
+DAVRANIŞ VƏ ÜSLUB TƏLİMİ (MƏCBURİ):
+1. QISA VƏ AYDIN OL: Söz yığını, uzun fəlsəfi müqəddimə və robotik şablonlar YAZMA.
+2. SUALA UYĞUN CAVAB ÖLÇÜSÜ:
+   • Salamlaşma və ya 1–2 sözlük qısa mesaj (məs: "Salam", "Salam aleykum", "Sabahın xeyir", "Necəsən?", "Sağ ol"): Təbii və ÇOX QISA cavab ver (məsələn, "Salam" yazana yalnız "Əleykum salam!" və ya "Əleykum salam, buyurun." de). ÖZÜN, AAQ, MODEL VƏ YA ƏMRLƏR BARƏDƏ HEÇ NƏ YAZMA!
+   • Gündəlik və konkret sual: Normal, aydın və birbaşa cavab ver (1–4 cümlə). Giriş ("Əlbəttə, məmnuniyyətlə...") və yekun ("Başqa sualınız varsa...") yazma.
+   • Geniş, açıq, izahlı və ya dərin sual ("geniş yaz", "ətraflı izah et", "necə işləyir", "müqayisə et" və s.): Geniş, aydın və yaxşı strukturlaşdırılmış cavab ver.
+3. ROBOTİK İFADƏLƏR QADAĞANDIR: "Bir süni intellekt olaraq...", "Bir dil modeli kimi...", "Əlbəttə!", "Məmnuniyyətlə!", "Platformasına xoş gəldiniz", "Sualınız qəbul edildi" kimi ifadələr İŞLƏTMƏ. Canlı, səmimi insan kimi danış.
+4. KİMLİK MƏHDUDİYYƏTİ: Yalnız istifadəçi konkret olaraq "sən kimsən", "hansı modelsən", "özün haqqında de" soruşduqda özün (${modelDef.alias}) və "AAQ - Ahl Al Qalam" (${OFFICIAL_CHANNEL_URL}) barədə qısa cavab ver. Şəxsi ad açıqlama.
+5. KONTEKST İNTİZAMI: Yalnız SONUNCU mesaja cavab ver! Tarixçədə əvvəlki texniki iş və ya başqa istifadəçinin sualı varsa, ona QƏTİYYƏN təkrar cavab vermə.
+• Canlı tarix (Bakı): ${azDateStr} (${isoDate}), ${currentYear}-ci il.
+${conversationContext}`;
 
     if (persona.id !== 'default') {
-      return `=== [MÜTLƏQ ROL İMMERSİYASI: ${persona.icon} ${persona.name.toUpperCase()}] ===
-Sən hazırda 100% "${persona.name}" xarakterindəsən. İstifadəçi bu xarakteri xüsusi olaraq seçib və sənin HƏR CÜMLƏNDƏ bu rolun nəfəsini, üslubunu və düşüncə tərzini hiss etməlidir!
-Başqa üsluba və ya quru standart köməkçi tonuna QƏTİYYƏN keçmə!
-
+      return `[ROL: ${persona.icon} ${persona.name}]
 ${persona.prompt}
 
-${temporalAndOrgContext}
-
-Əlavə Məxfilik Qaydaları:
-${config.policyText}`;
+${temporalAndOrgContext}`;
     }
 
-    return `=== [AAQ ELM VƏ MAARİF KÖMƏKÇİSİ] ===
-${persona.prompt}
+    return `${persona.prompt}
 
 ${temporalAndOrgContext}
 
-${config.systemPrompt}
-
-Qaydalar və Gizlilik:
-${config.policyText}`;
+Əlavə Təlimat:
+${config.systemPrompt}`;
   }
 
-  private buildSanitizedGeminiContents(history: ChatMessage[], userText: string, persona?: PersonaOption): any[] {
+  private getRecentCleanHistory(history: ChatMessage[], isGroup?: boolean): ChatMessage[] {
+    const maxItems = isGroup ? 4 : 6;
+    const now = Date.now();
+    // In groups, ignore stale context older than 12 minutes so old topics never leak into fresh messages
+    const filtered = isGroup
+      ? history.filter(h => !h.timestamp || now - new Date(h.timestamp).getTime() <= 12 * 60 * 1000)
+      : history;
+
+    const sliced = filtered.slice(-maxItems);
+    // Drop leading 'model' turn and any trailing unanswered 'user' turns so unrelated old prompts never merge
+    while (sliced.length > 0 && sliced[0].role === 'model') {
+      sliced.shift();
+    }
+    while (sliced.length > 0 && sliced[sliced.length - 1].role === 'user') {
+      sliced.pop();
+    }
+    return sliced;
+  }
+
+  private buildSanitizedGeminiContents(
+    history: ChatMessage[],
+    userText: string,
+    _persona?: PersonaOption,
+    isGroup?: boolean
+  ): any[] {
     const contents: any[] = [];
     let lastRole = '';
 
-    for (const h of history.slice(-6)) {
+    for (const h of this.getRecentCleanHistory(history, isGroup)) {
       if (!h.text || !h.text.trim()) continue;
       const role = h.role === 'model' ? 'model' : 'user';
-
-      if (contents.length === 0 && role !== 'user') continue;
-
-      if (role === lastRole) {
-        if (contents.length > 0) {
-          contents[contents.length - 1].parts[0].text += `\n${h.text}`;
-        }
-        continue;
-      }
+      if (role === lastRole) continue;
 
       contents.push({
         role,
@@ -382,19 +380,10 @@ ${config.policyText}`;
       lastRole = role;
     }
 
-    const wrappedPrompt =
-      persona && persona.id !== 'default'
-        ? `[Aktiv Rol: ${persona.name} — Roldan çıxmadan cavab ver]\n${userText}`
-        : userText;
-
-    if (lastRole === 'user' && contents.length > 0) {
-      contents[contents.length - 1].parts[0].text += `\n${wrappedPrompt}`;
-    } else {
-      contents.push({
-        role: 'user',
-        parts: [{ text: wrappedPrompt }]
-      });
-    }
+    contents.push({
+      role: 'user',
+      parts: [{ text: userText }]
+    });
 
     return contents;
   }
@@ -403,13 +392,14 @@ ${config.policyText}`;
     systemInstruction: string,
     history: ChatMessage[],
     userText: string,
-    persona?: PersonaOption
+    _persona?: PersonaOption,
+    isGroup?: boolean
   ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemInstruction }
     ];
 
-    for (const h of history.slice(-6)) {
+    for (const h of this.getRecentCleanHistory(history, isGroup)) {
       if (!h.text || !h.text.trim()) continue;
       messages.push({
         role: h.role === 'model' ? 'assistant' : 'user',
@@ -417,12 +407,7 @@ ${config.policyText}`;
       });
     }
 
-    const wrappedPrompt =
-      persona && persona.id !== 'default'
-        ? `[Aktiv Rol: ${persona.name} — Roldan çıxmadan cavab ver]\n${userText}`
-        : userText;
-
-    messages.push({ role: 'user', content: wrappedPrompt });
+    messages.push({ role: 'user', content: userText });
     return messages;
   }
 
@@ -475,10 +460,10 @@ ${config.policyText}`;
         model: modelId,
         messages,
         temperature,
-        max_tokens: 2048,
+        max_tokens: 4096,
         stream: false
       }),
-      signal: AbortSignal.timeout(22000)
+      signal: AbortSignal.timeout(25000)
     });
 
     if (!res.ok) {
@@ -513,10 +498,10 @@ ${config.policyText}`;
         model: modelId,
         messages,
         temperature,
-        max_tokens: 2048,
+        max_tokens: 4096,
         stream: true
       }),
-      signal: AbortSignal.timeout(32000)
+      signal: AbortSignal.timeout(40000)
     });
 
     if (!res.ok || !res.body) {
@@ -530,7 +515,7 @@ ${config.policyText}`;
     let accumulated = '';
 
     while (true) {
-      const { value, done } = await this.withTimeout(reader.read(), 15000, `${provider.toUpperCase()} chunk`);
+      const { value, done } = await this.withTimeout(reader.read(), 20000, `${provider.toUpperCase()} chunk`);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -629,9 +614,9 @@ ${config.policyText}`;
 
     const history = storage.getChatHistory(historyKey);
     const taggedPrompt = ctx?.isGroup && ctx.senderName ? `[${ctx.senderName}]: ${userText}` : userText;
-    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, taggedPrompt, persona);
+    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, taggedPrompt, persona, ctx?.isGroup);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
-    const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
+    const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.65 : 0.4);
 
     let didAttemptSearch = false;
 
@@ -644,7 +629,7 @@ ${config.policyText}`;
 
       if (target.provider === 'openrouter' || target.provider === 'groq') {
         try {
-          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, taggedPrompt, persona);
+          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, taggedPrompt, persona, ctx?.isGroup);
           const replyText = await this.callOpenAICompatible(target.provider, target.id, openAiMsgs, temp);
           if (replyText) {
             this.clearModelCooldown(target.id);
@@ -761,9 +746,9 @@ ${config.policyText}`;
 
     const history = storage.getChatHistory(historyKey);
     const taggedPrompt = ctx?.isGroup && ctx.senderName ? `[${ctx.senderName}]: ${userText}` : userText;
-    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, taggedPrompt, persona);
+    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, taggedPrompt, persona, ctx?.isGroup);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
-    const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
+    const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.65 : 0.4);
 
     if (needsSearch && client) {
       const firstGemini = cascade.find(m => m.provider === 'gemini' && !this.isModelCoolingDown(m.id))
@@ -788,7 +773,7 @@ ${config.policyText}`;
             this.clearModelCooldown(firstGemini.id);
             const sources = this.extractGroundingSources(response);
             if (sources.length > 0) {
-              replyText += `\n\n🌐 <b>Araşdırılan Mənbələr:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
+              replyText += `\n\n🌐 <b>Mənbələr:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
             }
             storage.addChatMessage(historyKey, 'user', taggedPrompt);
             storage.addChatMessage(historyKey, 'model', replyText);
@@ -812,7 +797,7 @@ ${config.policyText}`;
 
       if (target.provider === 'openrouter' || target.provider === 'groq') {
         try {
-          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, taggedPrompt, persona);
+          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, taggedPrompt, persona, ctx?.isGroup);
           const finalText = await this.streamOpenAICompatible(
             target.provider,
             target.id,
@@ -857,11 +842,11 @@ ${config.policyText}`;
         );
 
         let accumulatedText = '';
-        const streamDeadline = Date.now() + 35000;
+        const streamDeadline = Date.now() + 48000;
         const iterator = responseStream[Symbol.asyncIterator]();
 
         while (true) {
-          const remainingMs = Math.min(15000, Math.max(1000, streamDeadline - Date.now()));
+          const remainingMs = Math.min(20000, Math.max(1000, streamDeadline - Date.now()));
           const nextItem = await this.withTimeout(iterator.next(), remainingMs, `Gemini Stream Chunk (${target.id})`);
           if (nextItem.done) break;
           const chunkText = nextItem.value?.text;
@@ -916,7 +901,7 @@ ${config.policyText}`;
 
     const instruction =
       customSystemInstruction ||
-      `Sən "AAQ - Ahl Al Qalam" intellektual Azərbaycan köməkçisisən (${primary.alias}). Cari tarix: ${azDateStr}. Cavabları dəqiq, təbii, oxunaqlı və zəngin dildə təqdim et. Robot şablonları işlətmə.`;
+      `Sən səlis Azərbaycan dilində danışan köməkçisən. Cari tarix: ${azDateStr}. Qısa, aydın və birbaşa cavab ver. "Əlbəttə", "Bir süni intellekt olaraq" kimi robotik şablonlar işlətmə.`;
 
     const needsSearch = this.shouldSearchWeb(prompt);
 

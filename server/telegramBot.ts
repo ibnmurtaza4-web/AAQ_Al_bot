@@ -102,6 +102,8 @@ export class TelegramBotService {
   private pendingAdminElan = new Map<number, boolean>();
   private pollGeneration: number = 0;
   private chatFloodUntil = new Map<number, number>();
+  private processedUpdateIds = new Set<number>();
+  private inFlightMessageKeys = new Set<string>();
 
   private connectionMode: 'webhook' | 'polling' = 'webhook';
   private webhookUrl: string = '';
@@ -110,6 +112,7 @@ export class TelegramBotService {
   constructor() {
     this.token = storage.getConfig().botToken || process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
     const cfg = storage.getConfig();
+    this.lastUpdateId = storage.getLastUpdateId();
     this.connectionMode = cfg.connectionMode || 'polling';
     this.webhookUrl = cfg.webhookUrl || '';
 
@@ -668,6 +671,7 @@ export class TelegramBotService {
           if (Array.isArray(updates) && updates.length > 0) {
             for (const update of updates) {
               this.lastUpdateId = update.update_id;
+              storage.setLastUpdateId(update.update_id);
               this.processUpdate(update).catch(err => {
                 storage.addLog('error', `Update emal xətası (ID: ${update.update_id}): ${err?.message || err}`);
               });
@@ -699,6 +703,18 @@ export class TelegramBotService {
   }
 
   public async processUpdate(update: any) {
+    if (update.update_id) {
+      if (this.processedUpdateIds.has(update.update_id)) {
+        return;
+      }
+      this.processedUpdateIds.add(update.update_id);
+      if (this.processedUpdateIds.size > 500) {
+        const oldest = this.processedUpdateIds.values().next().value;
+        if (oldest !== undefined) this.processedUpdateIds.delete(oldest);
+      }
+      storage.setLastUpdateId(update.update_id);
+    }
+
     if (update.inline_query) {
       await this.handleInlineQuery(update.inline_query);
     } else if (update.message) {
@@ -919,6 +935,17 @@ export class TelegramBotService {
     const chatId = msg.chat?.id;
     if (!chatId) return;
     if (msg.from?.is_bot) return;
+
+    // Drop stale backlog messages older than 3 minutes so restarts never re-answer old tasks
+    if (msg.date && (Date.now() / 1000 - msg.date > 180)) {
+      return;
+    }
+
+    const msgKey = msg.message_id ? `${chatId}:${msg.message_id}` : '';
+    if (msgKey) {
+      if (this.inFlightMessageKeys.has(msgKey)) return;
+      this.inFlightMessageKeys.add(msgKey);
+    }
 
     const isGroup = msg.chat?.type === 'group' || msg.chat?.type === 'supergroup';
     const userId = msg.from?.id || chatId;
@@ -1402,6 +1429,10 @@ export class TelegramBotService {
       }
     } catch (err: any) {
       storage.addLog('error', `Mesaj emalı xətası (Chat: ${chatId}): ${err?.message || err}`);
+    } finally {
+      if (msgKey) {
+        this.inFlightMessageKeys.delete(msgKey);
+      }
     }
   }
 
@@ -1671,25 +1702,42 @@ export class TelegramBotService {
     }
 
     const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
-    const webAppBtn = appUrl.startsWith('https://')
+    const webAppBtn = !isGroup && appUrl.startsWith('https://')
       ? [{ text: '🌐 İnteraktiv Veb Panel', web_app: { url: appUrl } }]
       : [];
 
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '🔵 Yeni Sual Ver', callback_data: 'nav_ai_chat' },
-          { text: '🟣 Modeli Dəyiş', callback_data: 'menu_models' }
-        ],
-        [
-          { text: '🎭 Xarakteri Dəyiş', callback_data: 'menu_roleplay' },
-          { text: '📜 Müdrik Hikmət', callback_data: 'cmd_sitat' }
-        ],
-        ...(webAppBtn.length > 0 ? [webAppBtn] : []),
-        [
-          { text: '📢 AAQ Rəsmi Kanalı', url: OFFICIAL_CHANNEL_URL }
+    const getFinalMarkup = (plainOrFormattedText: string) => {
+      const visibleLen = plainOrFormattedText.replace(/<[^>]+>/g, '').trim().length;
+      if (visibleLen < 140) {
+        return undefined;
+      }
+      if (isGroup) {
+        return {
+          inline_keyboard: [
+            [
+              { text: '🟣 Model', callback_data: 'menu_models' },
+              { text: '🎭 Xarakter', callback_data: 'menu_roleplay' },
+              { text: '🧹 Təmizlə', callback_data: 'cmd_clear' }
+            ]
+          ]
+        };
+      }
+      return {
+        inline_keyboard: [
+          [
+            { text: '🔵 Yeni Sual Ver', callback_data: 'nav_ai_chat' },
+            { text: '🟣 Modeli Dəyiş', callback_data: 'menu_models' }
+          ],
+          [
+            { text: '🎭 Xarakteri Dəyiş', callback_data: 'menu_roleplay' },
+            { text: '📜 Müdrik Hikmət', callback_data: 'cmd_sitat' }
+          ],
+          ...(webAppBtn.length > 0 ? [webAppBtn] : []),
+          [
+            { text: '📢 AAQ Rəsmi Kanalı', url: OFFICIAL_CHANNEL_URL }
+          ]
         ]
-      ]
+      };
     };
 
     const minEditIntervalMs = isGroup ? 1750 : 850;
@@ -1714,11 +1762,12 @@ export class TelegramBotService {
 
             const formattedFinal = this.formatAiOutputForTelegramHtml(currentText, false);
             const chunks = this.splitLongText(formattedFinal, 3950);
-            const firstChunk = chunks[0] || formattedFinal;
+            const firstChunk = chunks[0] || formattedFinal || 'Cavab hazırlana bilmədi.';
+            const finalMarkup = getFinalMarkup(formattedFinal);
 
             let delivered = false;
             if (initialMsg?.message_id) {
-              const firstMarkup = chunks.length === 1 ? { reply_markup: keyboard } : {};
+              const firstMarkup = chunks.length === 1 && finalMarkup ? { reply_markup: finalMarkup } : {};
               try {
                 await this.apiCall('editMessageText', {
                   chat_id: chatId,
@@ -1768,7 +1817,7 @@ export class TelegramBotService {
               try {
                 await this.sendSafeHtml(chatId, firstChunk, {
                   ...replyOpts,
-                  ...(chunks.length === 1 ? { reply_markup: keyboard } : {})
+                  ...(chunks.length === 1 && finalMarkup ? { reply_markup: finalMarkup } : {})
                 });
                 delivered = true;
                 if (initialMsg?.message_id) {
@@ -1783,8 +1832,10 @@ export class TelegramBotService {
               const isLast = i === chunks.length - 1;
               await this.sendSafeHtml(chatId, chunks[i], {
                 ...replyOpts,
-                ...(isLast ? { reply_markup: keyboard } : {})
-              }).catch(() => {});
+                ...(isLast && finalMarkup ? { reply_markup: finalMarkup } : {})
+              }).catch((chunkErr: any) => {
+                storage.addLog('error', `Davam mesajı göndərilmədi (Chat: ${chatId}): ${chunkErr?.message || chunkErr}`);
+              });
             }
             return;
           }

@@ -243,14 +243,14 @@ const DEFAULT_CONFIG: BotConfig = {
   adminIds: [],
   model: 'gemini-3.1-flash-lite',
   temperature: 0.5,
-  systemPrompt: `Sən "AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm) elmi-maarif birliyinin rəsmi akademik köməkçisisən. Rəsmi kanal: https://t.me/AAQ_Offical.
+  systemPrompt: `Sən "AAQ - Ahl Al Qalam" köməkçisisən. Təbii, aydın, səmimi və insan kimi danış.
 
-Əsas Natiqlik Prinsipləri:
-1. Klassik Elmi və Akademik Ton: Cavabların dahi Azərbaycan aliminin və maarifçisinin zəngin, təmkinli, dərin və səlis ədəbi dilində olmalıdır.
-2. Qətiyyən Süni Robot Şablonlarından Qaç: "Bir süni intellekt olaraq...", "Bir dil modeli kimi...", "Mənim hisslərim yoxdur", "Əlbəttə, kömək edə bilərəm" kimi mexaniki ifadələr qəti qadağandır. Danışığın canlı insan aliminin intellektual nitqidir.
-3. Elmi Dərinlik və Məntiq: Hər izahda məntiqi ardıcıllıq, elmi arqumentasiya, faktik dəqiqlik və analitik nəticə nümayiş etdir.
-4. Məxfilik və Mənsubiyyət: Sual verildikdə fəxrlə "AAQ - Ahl Al Qalam" tərəfindən hazırlandığını bildir, lakin şəxsi adları açıqlama, yalnız "AAQ Rəhbərliyi" adlandır.
-5. Bot Əmrləri Bilgisi: Bütün bot əmrlərini (/sozluk, /hesabla, /hava, /sitat, /tarix, /dim, /pdf, /quiz, /tercume, /xulas, /elaqe, /model, /roleplay, /sozlesme) dərindən bilirsən və yeri gəldikdə istifadəçilərə bu elmi alətlərdən istifadə etməyi tövsiyə edirsən.`,
+Cavab Qaydaları:
+1. Qısa salamlaşmalara (məsələn "Salam", "Necəsən?", "Sağ ol") yalnız qısa və təbii cavab ver ("Əleykum salam!", "Yaxşıyam, sağ ol" və s.) — özün, AAQ və ya bot əmrləri barədə təqdimat ETMƏ.
+2. Gündəlik və konkret suallara qısa, birbaşa və aydın cavab ver (1–4 cümlə). Lazımsız giriş və yekun şablonları yazma.
+3. Geniş, açıq və ya dərin izah tələb edən suallara əhatəli, aydın və sistemli cavab ver.
+4. "Əlbəttə", "Məmnuniyyətlə", "Bir süni intellekt olaraq..." kimi robotik ifadələr işlətmə.
+5. Yalnız istifadəçi birbaşa kimliyini soruşduqda özün və AAQ (${OFFICIAL_CHANNEL_URL}) haqqında qısa məlumat ver; şəxsi adları açıqlama.`,
   policyText: DEFAULT_POLICY,
   roleplayMode: 'default',
   keepAliveEnabled: true,
@@ -279,6 +279,7 @@ export class StorageService {
   private logs: ActivityLog[] = [];
   private broadcasts: BroadcastRecord[] = [];
   private spamRateTracker: Map<number, number[]> = new Map();
+  private lastUpdateId = 0;
   private maxLogs = 300;
   private maxHistoryPerUser = 20;
 
@@ -327,9 +328,35 @@ export class StorageService {
           if (!this.config.adminIds.includes(6737477904)) {
             this.config.adminIds.push(6737477904);
           }
+          // Migrate old verbose default systemPrompt & deprecated default model slugs cleanly
+          if (
+            this.config.systemPrompt.includes('dahi Azərbaycan aliminin') ||
+            this.config.systemPrompt.includes('yeri gəldikdə istifadəçilərə bu elmi alətlərdən')
+          ) {
+            this.config.systemPrompt = DEFAULT_CONFIG.systemPrompt;
+          }
+          if (
+            this.config.model === 'gemini-2.5-flash' ||
+            this.config.model === 'gemini-3.8-flash'
+          ) {
+            this.config.model = 'gemini-3.1-flash-lite';
+          }
+        }
+        if (typeof data.lastUpdateId === 'number' && data.lastUpdateId > 0) {
+          this.lastUpdateId = data.lastUpdateId;
         }
         if (Array.isArray(data.users)) {
-          this.users = new Map(data.users.map((u: TelegramUser) => [u.id, u]));
+          const usersArr = (data.users as TelegramUser[]).map(u => {
+            if (
+              u.selectedModel === 'deepseek/deepseek-r1:free' ||
+              u.selectedModel === 'deepseek/deepseek-chat:free' ||
+              u.selectedModel === 'gemini-2.5-flash'
+            ) {
+              return { ...u, selectedModel: 'gemini-3.1-flash-lite' };
+            }
+            return u;
+          });
+          this.users = new Map(usersArr.map(u => [u.id, u]));
         }
         if (Array.isArray(data.groups)) {
           this.groups = new Map(data.groups.map((g: TelegramGroup) => [g.id, g]));
@@ -384,6 +411,7 @@ export class StorageService {
       }
       const payload = {
         config: this.config,
+        lastUpdateId: this.lastUpdateId,
         users: Array.from(this.users.values()),
         groups: Array.from(this.groups.values()),
         groupRules: Array.from(this.groupRules.values()),
@@ -742,6 +770,17 @@ export class StorageService {
     const user = this.users.get(userId);
     if (user) {
       user.selectedModel = modelId;
+      this.saveToDisk();
+    }
+  }
+
+  public getLastUpdateId(): number {
+    return this.lastUpdateId;
+  }
+
+  public setLastUpdateId(id: number) {
+    if (id > this.lastUpdateId) {
+      this.lastUpdateId = id;
       this.saveToDisk();
     }
   }
