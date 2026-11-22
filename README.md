@@ -9,15 +9,15 @@ Rəsmi Təşkilat Kanalı: [t.me/AAQ_Offical](https://t.me/AAQ_Offical)
 ## 🌟 Əsas Xüsusiyyətlər
 
 ### 1. ⚡ Çoxmühərrikli Süni İntellekt (Multi-Provider AI Engine)
-- **Google Gemini Modelləri:** `gemini-3.8-flash` (Defolt), `gemini-2.5-flash`, `gemini-3.7-flash`, `gemini-3.1-flash-lite`, `gemini-flash-latest`.
-- **OpenRouter Modelləri:** `DeepSeek R1`, `DeepSeek V3`, `Llama 3.3 70B`, `Qwen 2.5 72B`.
+- **Google Gemini Modelləri:** `gemini-3.1-flash-lite` (Defolt), `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-flash-latest`.
+- **OpenRouter Modelləri:** `OpenRouter Auto Router`, `Nvidia Nemotron 3 Ultra`, `Google Gemma 4 31B`, `Nvidia Nemotron 3.5 Lightning`.
 - **Groq LPU Modelləri:** `Groq Llama 3.3 70B`, `Groq DeepSeek R1 70B`.
-- **İtiksiz Kaskad (Auto-Failover):** Hər hansı modeldə yüklənmə və ya xəta yarandıqda sistem dərhal digər aktiv modelə keçir.
+- **İtiksiz Kaskad (Auto-Failover) & Circuit Breaker:** Xəta verən və ya limiti dolan modellər müvəqqəti kənara qoyularaq sistem dərhal digər aktiv modelə keçir.
 - **Dərin Xarakter İmmersiyası:** Müdrik Filosof, Baş Proqramçı, DİM Eksperti, Kiberpunk 2077, Səmimi Dost və Xarici Dil Müəllimi.
 
-### 2. 📄 Ağıllı PDF Sənəd Analizi
-- **Şəxsi İstifadə Rejimi:** Qruplara atılan PDF-lərin avtomatik işə düşməsi və qrupu narahat etməsi ləğv edilib. PDF analizi **yalnız şəxsi söhbətlərdə** işləyir.
-- **Dərin Analiz:** Multimodal mühərrik vasitəsilə mətni çıxarır, strukturu xülasələşdirir və sualları cavablandırır.
+### 2. 📄 Qrup AI İnteqrasiyası & Multimodal Analiz
+- **Tam Qrup İnteqrasiyası:** Qruplarda `@bot_adı <sual>`, bota **Reply (Cavab)**, `/sorus`, `/tercume`, `/xulas`, `/hesabla`, `/sozluk`, `/quiz`, `/analiz`, `/tagall` və adminlər üçün `/qrupai ac/bagla` dəstəklənir.
+- **Şəkil, PDF və Səs Analizi:** Həm DM-də, həm də qruplarda bota yönəldilən (tag/Reply) şəkil, PDF, `.txt` və səsli mesajlar tam kontekstlə analiz edilir.
 
 ### 3. ⚡ 24/7 Oyaq Qalma (Keep-Alive 2.0 & Ağıllı Hibrid Webhook)
 - **Ağıllı Telegram Webhook:** İctimai HTTPS ünvanını avtomatik yoxlayır (`max_connections: 40`), serveri anında oyadır və xəta olduqda mesaj itkisi olmaması üçün Polling rejiminə ehtiyat keçid edir.

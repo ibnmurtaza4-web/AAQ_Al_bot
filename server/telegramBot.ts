@@ -7,7 +7,7 @@ import {
   REAL_HISTORICAL_QUOTES, 
   OFFICIAL_CHANNEL_URL 
 } from './storage.js';
-import { geminiService, ROLEPLAY_PERSONAS } from './geminiService.js';
+import { geminiService, ROLEPLAY_PERSONAS, ChatRuntimeContext } from './geminiService.js';
 import { keepAliveService } from './keepAlive.js';
 import { solveMathExpression } from './mathEngine.js';
 import { lookupWord } from './dictionaryData.js';
@@ -80,7 +80,8 @@ export const KNOWN_COMMANDS = new Set([
   'pdf', 'model', 'ai', 'aimodel',
   // Personas & Management
   'roleplay', 'persona', 'rejim',
-  'clear', 'temizle', 'stats', 'keepalive'
+  'clear', 'temizle', 'stats', 'keepalive',
+  'qrupai'
 ]);
 
 export interface BotIdentity {
@@ -99,6 +100,8 @@ export class TelegramBotService {
   private pollingErrorCount: number = 0;
   private elanDrafts = new Map<string, { text: string; adminChatId: number }>();
   private pendingAdminElan = new Map<number, boolean>();
+  private pollGeneration: number = 0;
+  private chatFloodUntil = new Map<number, number>();
 
   private connectionMode: 'webhook' | 'polling' = 'webhook';
   private webhookUrl: string = '';
@@ -115,10 +118,11 @@ export class TelegramBotService {
       try {
         const me = await this.getMe();
         if (me && this.connectionMode === 'polling') {
-          const pollStale = this.lastPollSuccessAt > 0 && Date.now() - this.lastPollSuccessAt > 55000;
+          const pollStale = this.lastPollSuccessAt > 0 && Date.now() - this.lastPollSuccessAt > 75000;
           if (!this.isPolling || !this.isLoopRunning || pollStale) {
             if (pollStale) {
               storage.addLog('keepalive', '⚠️ Polling döngüsü gecikdi, Watchdog tərəfindən avtomatik bərpa edilir...');
+              this.pollGeneration++;
               this.shouldStop = true;
               this.isPolling = false;
               this.isLoopRunning = false;
@@ -428,16 +432,25 @@ export class TelegramBotService {
       throw new Error('Telegram Bot Token daxil edilməyib.');
     }
 
+    const timeoutMs = method === 'getUpdates' ? 32000 : 12000;
     const url = `https://api.telegram.org/bot${this.token}/${method}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs)
     });
 
     const data = (await res.json()) as any;
     if (!data.ok) {
-      throw new Error(`Telegram API xətası (${method}): ${data.description || 'Naməlum xəta'}`);
+      if (data.error_code === 429 && data.parameters?.retry_after && payload?.chat_id) {
+        const retrySec = Math.min(20, Number(data.parameters.retry_after) || 5);
+        this.chatFloodUntil.set(Number(payload.chat_id), Date.now() + retrySec * 1000);
+      }
+      const err: any = new Error(`Telegram API xətası (${method}): ${data.description || 'Naməlum xəta'}`);
+      err.errorCode = data.error_code;
+      err.retryAfter = data.parameters?.retry_after;
+      throw err;
     }
     return data.result;
   }
@@ -476,6 +489,8 @@ export class TelegramBotService {
 
       await this.apiCall('deleteWebhook', { drop_pending_updates: false });
 
+      this.pollGeneration++;
+      const currentGen = this.pollGeneration;
       this.isPolling = true;
       this.shouldStop = false;
       this.pollingErrorCount = 0;
@@ -486,7 +501,7 @@ export class TelegramBotService {
         `🤖 Bot aktivləşdirildi: @${me.username} (ID: ${me.id}). AAQ - Ahl Al Qalam sistemi hazırdır.`
       );
 
-      this.pollLoop();
+      this.pollLoop(currentGen);
 
       return {
         success: true,
@@ -503,6 +518,7 @@ export class TelegramBotService {
   }
 
   public async stopPolling(): Promise<{ success: boolean; message: string }> {
+    this.pollGeneration++;
     this.shouldStop = true;
     this.isPolling = false;
     this.isLoopRunning = false;
@@ -630,14 +646,14 @@ export class TelegramBotService {
     }
   }
 
-  private async pollLoop() {
-    if (this.isLoopRunning) {
+  private async pollLoop(gen: number) {
+    if (gen !== this.pollGeneration) {
       return;
     }
     this.isLoopRunning = true;
     this.lastPollSuccessAt = Date.now();
     try {
-      while (this.isPolling && !this.shouldStop) {
+      while (this.isPolling && !this.shouldStop && gen === this.pollGeneration) {
         try {
           const updates = await this.apiCall('getUpdates', {
             offset: this.lastUpdateId + 1,
@@ -645,6 +661,7 @@ export class TelegramBotService {
             allowed_updates: ['message', 'callback_query', 'inline_query']
           });
 
+          if (gen !== this.pollGeneration || this.shouldStop) break;
           this.lastPollSuccessAt = Date.now();
           this.pollingErrorCount = 0;
 
@@ -657,11 +674,14 @@ export class TelegramBotService {
             }
           }
         } catch (err: any) {
+          if (gen !== this.pollGeneration || this.shouldStop) break;
           this.pollingErrorCount++;
           const errMsg = err?.message || String(err);
           if (errMsg.includes('409') || errMsg.includes('Conflict')) {
-            storage.addLog('error', '⚠️ Telegram 409 Conflict: Eyni token başqa yerdə də işləyir.');
-            await new Promise(r => setTimeout(r, 5000));
+            if (this.pollingErrorCount === 1 || this.pollingErrorCount % 6 === 0) {
+              storage.addLog('error', '⚠️ Telegram 409 Conflict: Başqa sessiyanın bitməsi gözlənilir...');
+            }
+            await new Promise(r => setTimeout(r, 6000));
           } else {
             if (this.pollingErrorCount % 5 === 0) {
               storage.addLog('error', `Polling xətası: ${errMsg}`);
@@ -672,7 +692,9 @@ export class TelegramBotService {
         }
       }
     } finally {
-      this.isLoopRunning = false;
+      if (gen === this.pollGeneration) {
+        this.isLoopRunning = false;
+      }
     }
   }
 
@@ -795,7 +817,10 @@ export class TelegramBotService {
     } catch (e) {}
   }
 
-  private async checkIsAdmin(chatId: number, userId: number): Promise<boolean> {
+  private async checkIsAdmin(chatId: number, userId?: number, msg?: any): Promise<boolean> {
+    if (msg?.sender_chat?.id === chatId || userId === 1087968824) {
+      return true; // Anonymous group admin acting on behalf of the group
+    }
     if (!userId) return false;
     try {
       const res = await this.apiCall('getChatMember', {
@@ -841,15 +866,38 @@ export class TelegramBotService {
     if (ok) {
       return !ids.has(Number(userId));
     }
-    const isAdmin = await this.checkIsAdmin(chatId, userId);
+    const isAdmin = await this.checkIsAdmin(chatId, userId, msg);
     return !isAdmin;
   }
 
-  private hasBotMention(text: string | undefined, botUsername: string): boolean {
-    if (!text || !botUsername) return false;
+  private hasBotMention(text: string | undefined, botUsername: string, msg?: any): boolean {
+    if (!botUsername) return false;
     const cleanBot = this.normalizeUsername(botUsername);
-    const words = text.toLowerCase().split(/\s+/);
-    return words.some(w => w === `@${cleanBot}` || w.startsWith(`@${cleanBot}`));
+    const entities: any[] = msg?.entities || msg?.caption_entities || [];
+    if (text && Array.isArray(entities)) {
+      for (const ent of entities) {
+        if (ent.type === 'mention') {
+          const segment = text.slice(ent.offset, ent.offset + ent.length).toLowerCase();
+          if (segment === `@${cleanBot}`) return true;
+        }
+        if (ent.type === 'text_mention' && ent.user?.id === this.botIdentity.id) {
+          return true;
+        }
+      }
+    }
+    if (!text) return false;
+    const escaped = cleanBot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|\\s)@${escaped}(?=$|[\\s,.:;!?\\)])`, 'i').test(text);
+  }
+
+  private isRepliedToBot(msg: any): boolean {
+    if (!msg?.reply_to_message) return false;
+    if (this.botIdentity.id && msg.reply_to_message.from?.id === this.botIdentity.id) {
+      return true;
+    }
+    const replyUser = this.normalizeUsername(msg.reply_to_message.from?.username);
+    const botUser = this.normalizeUsername(this.botIdentity.username);
+    return Boolean(botUser && replyUser && replyUser === botUser);
   }
 
   private extractTelegramCommand(msg: any): { name: string; token: string; targetUsername?: string } | null {
@@ -873,17 +921,29 @@ export class TelegramBotService {
     if (msg.from?.is_bot) return;
 
     const isGroup = msg.chat?.type === 'group' || msg.chat?.type === 'supergroup';
-    const userId = msg.from?.id;
+    const userId = msg.from?.id || chatId;
     const config = storage.getConfig();
+    const replyOpts = msg.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
 
     try {
-      // 1. User & Group Registration (Auto accept terms on activity to never block valid commands)
-      const user = storage.registerOrUpdateUser({
-        id: userId,
-        username: msg.from?.username,
-        first_name: msg.from?.first_name,
-        last_name: msg.from?.last_name
-      });
+      // 1. User & Group Registration
+      const user = msg.from?.id
+        ? storage.registerOrUpdateUser({
+            id: msg.from.id,
+            username: msg.from?.username,
+            first_name: msg.from?.first_name,
+            last_name: msg.from?.last_name
+          })
+        : storage.getUser(chatId) || {
+            id: userId,
+            first_name: msg.chat?.title || 'Admin',
+            acceptedTerms: true,
+            firstSeen: new Date().toISOString(),
+            lastSeen: new Date().toISOString(),
+            messageCount: 1
+          };
 
       if (isGroup) {
         storage.registerOrUpdateGroup({
@@ -891,14 +951,33 @@ export class TelegramBotService {
           title: msg.chat?.title || 'Qrup',
           type: msg.chat?.type || 'group'
         });
+        if (msg.from?.id) {
+          storage.recordGroupMember(chatId, msg.from);
+        }
       }
+
+      if (!this.botIdentity.username) {
+        await this.getMe();
+      }
+
+      const command = this.extractTelegramCommand(msg);
+      const rawTextOrCaption = msg.text || msg.caption || '';
+      const isMentioned = this.hasBotMention(rawTextOrCaption, this.botIdentity.username, msg);
+      const isReplyToUs = this.isRepliedToBot(msg);
+      const groupAiAlways = isGroup && storage.isGroupAiAlwaysActive(chatId);
+      const isAddressedToBot =
+        !isGroup ||
+        Boolean(command && (!command.targetUsername || command.targetUsername === this.normalizeUsername(this.botIdentity.username))) ||
+        isMentioned ||
+        isReplyToUs ||
+        groupAiAlways;
 
       // 2. Block & Spam check
       if (!this.isOwner(msg.from)) {
         const blockStatus = storage.isUserBlocked(userId);
         if (blockStatus.isBlocked) {
           if (!isGroup) {
-            const untilFormatted = blockStatus.until 
+            const untilFormatted = blockStatus.until
               ? `\n⏳ <b>Blokun Bitmə Tarixi:</b> ${new Date(blockStatus.until).toLocaleString('az-AZ')}`
               : '\n⏳ <b>Müddət:</b> Daimi (Müddətsiz)';
             await this.sendSafeHtml(
@@ -909,18 +988,15 @@ export class TelegramBotService {
           return;
         }
 
-        if (storage.checkSpamRate(userId)) {
+        // Only rate-limit messages actually directed to the bot so ordinary group chatter is never throttled
+        if ((!isGroup || isAddressedToBot) && storage.checkSpamRate(userId)) {
           await this.sendSafeHtml(
             chatId,
-            `⚠️ <i>Xəbərdarlıq: Mesaj göndərmə sürətiniz yüksəkdir. Zəhmət olmasa bir qədər gözləyin.</i>`
+            `⚠️ <i>Xəbərdarlıq: Bot sorğu sürətiniz yüksəkdir. Zəhmət olmasa bir qədər gözləyin.</i>`,
+            replyOpts
           );
           return;
         }
-      }
-
-      const command = this.extractTelegramCommand(msg);
-      if (!this.botIdentity.username) {
-        await this.getMe();
       }
 
       if (
@@ -937,15 +1013,15 @@ export class TelegramBotService {
       }
 
       // 4. Moderation in Groups
-      if (isGroup && msg.text) {
-        if (config.antiProfanity && PROFANITY_REGEX.test(msg.text)) {
+      if (isGroup && rawTextOrCaption) {
+        if (config.antiProfanity && PROFANITY_REGEX.test(rawTextOrCaption)) {
           await this.deleteTelegramMessage(chatId, msg.message_id);
           await this.sendSafeHtml(chatId, `⚠️ ${this.escapeHtml(this.getUserName(msg.from))}, qrupda qeyri-etik və təhqiramiz ifadələr qadağandır!`);
           storage.addLog('moderation', `Söyüş silindi: [${this.getUserName(msg.from)}] qrupda qadağan olunmuş söz işlətdi.`);
           return;
         }
 
-        if (config.antiLink && URL_REGEX.test(msg.text)) {
+        if (config.antiLink && URL_REGEX.test(rawTextOrCaption)) {
           if (await this.shouldDeleteLink(chatId, msg)) {
             await this.deleteTelegramMessage(chatId, msg.message_id);
             await this.sendSafeHtml(chatId, `⚠️ ${this.escapeHtml(this.getUserName(msg.from))}, yalnız qrup adminləri link paylaşa bilər!`);
@@ -961,7 +1037,8 @@ export class TelegramBotService {
         if (addressedToUs) {
           await this.sendSafeHtml(
             chatId,
-            `<code>${this.escapeHtml(command.token)}</code> əmri mövcud deyil.\nAşağıdakı rəsmi əmrlərdən istifadə edə bilərsiniz:`
+            `<code>${this.escapeHtml(command.token)}</code> əmri mövcud deyil.\nAşağıdakı rəsmi əmrlərdən istifadə edə bilərsiniz:`,
+            replyOpts
           );
           await this.handleHelp(chatId, this.isOwner(msg.from));
         }
@@ -969,14 +1046,13 @@ export class TelegramBotService {
       }
 
       // 6. Commands Processing
-      if (msg.text) {
+      if (msg.text && command) {
         const text = msg.text.trim();
-        const cmd = command?.name ?? '';
+        const cmd = command.name;
 
-        // PUBLIC COMMANDS
         switch (cmd) {
           case 'start':
-            await this.handleStart(chatId, user, this.isOwner(msg.from));
+            await this.handleStart(chatId, user, this.isOwner(msg.from), isGroup);
             return;
           case 'help':
           case 'kömək':
@@ -994,13 +1070,13 @@ export class TelegramBotService {
           case 'model':
           case 'ai':
           case 'aimodel':
-            await this.handleModelMenu(chatId, userId);
+            await this.handleModelMenu(chatId, userId, replyOpts);
             return;
           case 'dim':
             await this.handleDim(chatId);
             return;
           case 'pdf':
-            await this.handlePdfInstruction(chatId, isGroup);
+            await this.handlePdfInstruction(chatId, isGroup, replyOpts);
             return;
           case 'info':
             await this.handleInfo(chatId, msg, isGroup);
@@ -1009,18 +1085,21 @@ export class TelegramBotService {
           case 'qaydalar': {
             const qText = text.replace(/^\/\S+/, '').trim();
             if (qText) {
-              const isAdmin = isGroup ? await this.checkIsAdmin(chatId, msg.from?.id) : this.isOwner(msg.from);
-              if (isAdmin) {
+              const isAdmin = isGroup ? await this.checkIsAdmin(chatId, msg.from?.id, msg) : this.isOwner(msg.from);
+              if (isAdmin || this.isOwner(msg.from)) {
                 storage.setGroupRules(chatId, qText, msg.from?.id);
-                await this.sendSafeHtml(chatId, '✅ Qrup qaydaları yeniləndi.');
+                await this.sendSafeHtml(chatId, '✅ Qrup qaydaları yeniləndi.', replyOpts);
               } else {
-                await this.sendSafeHtml(chatId, '⛔ Bu əmr yalnız qrup adminləri üçündür.');
+                await this.sendSafeHtml(chatId, '⛔ Bu əmr yalnız qrup adminləri üçündür.', replyOpts);
               }
             } else {
-              await this.showGroupRules(chatId);
+              await this.showGroupRules(chatId, replyOpts);
             }
             return;
           }
+          case 'qrupai':
+            await this.handleQrupAi(chatId, msg, isGroup, text);
+            return;
           case 'aktivlik':
             await this.handleAktivlik(chatId, isGroup);
             return;
@@ -1029,42 +1108,46 @@ export class TelegramBotService {
             return;
           case 'elaqe':
           case 'əlaqə': {
-            const directMsg = text.replace(/^\/(elaqe|əlaqə)\s*/i, '').trim();
+            const directMsg = text.replace(/^\/(elaqe|əlaqə)(?:@\S+)?\s*/i, '').trim();
             if (directMsg) {
               await this.handleDirectContact(chatId, msg, directMsg);
             } else {
               if (!isGroup) {
                 await this.startContact(chatId);
               } else {
-                await this.sendSafeHtml(chatId, '📞 Rəhbərliklə əlaqə üçün mənə şəxsi çatda <code>/elaqe &lt;mesajınız&gt;</code> yazın.');
+                await this.sendSafeHtml(
+                  chatId,
+                  '📞 Rəhbərliklə əlaqə üçün <code>/elaqe &lt;mesajınız&gt;</code> yazın və ya mənə şəxsi çatda müraciət edin.',
+                  replyOpts
+                );
               }
             }
             return;
           }
           case 'sorus':
           case 'sual':
-            await this.handleSorus(chatId, userId, text);
+            await this.handleSorus(chatId, userId, text, isGroup, msg);
             return;
           case 'quiz':
-            await this.handleQuiz(chatId);
+            await this.handleQuiz(chatId, replyOpts);
             return;
           case 'tercume':
           case 'tərcümə':
-            await this.handleTercume(chatId, text);
+            await this.handleTercume(chatId, text, msg);
             return;
           case 'xulas':
           case 'xülasə':
-            await this.handleXulas(chatId, text);
+            await this.handleXulas(chatId, text, msg);
             return;
           case 'hesabla':
-            await this.handleHesabla(chatId, text);
+            await this.handleHesabla(chatId, text, msg);
             return;
           case 'sozluk':
           case 'sözlük':
-            await this.handleSozluk(chatId, text);
+            await this.handleSozluk(chatId, text, msg);
             return;
           case 'hava':
-            await this.handleHava(chatId, text);
+            await this.handleHava(chatId, text, msg);
             return;
           case 'sitat':
           case 'sitatlar':
@@ -1077,13 +1160,21 @@ export class TelegramBotService {
           case 'roleplay':
           case 'persona':
           case 'rejim':
-            await this.handleRoleplayMenu(chatId, userId);
+            await this.handleRoleplayMenu(chatId, userId, replyOpts);
             return;
           case 'clear':
-          case 'temizle':
-            storage.clearChatHistory(userId);
-            await this.sendSafeHtml(chatId, '🧹 Söhbət yaddaşı təmizləndi! Yeni mövzuya başlaya bilərik.');
+          case 'temizle': {
+            const historyKey = isGroup ? chatId : userId;
+            storage.clearChatHistory(historyKey);
+            await this.sendSafeHtml(
+              chatId,
+              isGroup
+                ? '🧹 Qrup AI söhbət yaddaşı təmizləndi! Yeni mövzuya başlaya bilərik.'
+                : '🧹 Söhbət yaddaşı təmizləndi! Yeni mövzuya başlaya bilərik.',
+              replyOpts
+            );
             return;
+          }
           case 'keepalive':
           case 'stats': {
             const ka = keepAliveService.getStatus();
@@ -1101,14 +1192,16 @@ export class TelegramBotService {
                 `⏱️ <b>Fasiləsiz İş (Uptime):</b> ${uptimeMin} dəqiqə\n` +
                 `💓 <b>Nabız Sayı:</b> ${ka.totalPings} | İnterval: ${ka.intervalMinutes} dəq | Socket Timeout: ${Math.round(ka.httpKeepAliveTimeoutMs / 1000)}s\n` +
                 `🌐 <b>Webhook Oyanma:</b> ${ka.webhookPings} dəfə (${ka.webhookHealthOk ? 'Sağlam' : 'Yoxlanılır'})\n` +
+                (isGroup ? `👥 <b>Qrup AI Rejimi:</b> ${storage.isGroupAiAlwaysActive(chatId) ? '🟢 Bütün mesajlarda aktiv' : '🔵 Standart (@tag / Reply)'}\n` : '') +
                 `🤖 <b>Aktiv Model:</b> ${modelDef?.name || activeModelId}\n` +
                 `🎭 <b>Aktiv Xarakter:</b> ${activePersona.icon} ${activePersona.name}\n` +
-                `🔑 <b>Mühərriklər:</b> Gemini ${keys.gemini ? '🟢' : '⚪'} | OpenRouter ${keys.openrouter ? '🟢' : '⚪'} | Groq ${keys.groq ? '🟢' : '⚪'}`
+                `🔑 <b>Mühərriklər:</b> Gemini ${keys.gemini ? '🟢' : '⚪'} | OpenRouter ${keys.openrouter ? '🟢' : '⚪'} | Groq ${keys.groq ? '🟢' : '⚪'}`,
+              replyOpts
             );
             return;
           }
           case 'admin': {
-            const secret = text.replace(/^\/admin\s*/i, '').trim();
+            const secret = text.replace(/^\/admin(?:@\S+)?\s*/i, '').trim();
             const adminIds = storage.getAdminIds();
             if (storage.verifyAdminSecret(secret) || adminIds.length === 0) {
               storage.addAdminId(userId);
@@ -1117,7 +1210,7 @@ export class TelegramBotService {
             } else if (this.isOwner(msg.from)) {
               await this.handleOwnerPanel(chatId);
             } else {
-              await this.sendSafeHtml(chatId, '🔒 <b>Admin Girişi</b>\nİstifadə: <code>/admin [gizli_şifrə]</code>\n<i>Qeyd: Admin şifrəsi idarə panelində təyin olunur.</i>');
+              await this.sendSafeHtml(chatId, '🔒 <b>Admin Girişi</b>\nİstifadə: <code>/admin [gizli_şifrə]</code>\n<i>Qeyd: Admin şifrəsi idarə panelində təyin olunur.</i>', replyOpts);
             }
             return;
           }
@@ -1162,17 +1255,17 @@ export class TelegramBotService {
             await this.handleHelp(chatId, false);
             return;
           }
-          const textAfterCmd = text.replace(/^\/(msg|cavab)\s*/, '').trim();
+          const textAfterCmd = text.replace(/^\/(msg|cavab)(?:@\S+)?\s*/i, '').trim();
           const firstSpaceIdx = textAfterCmd.indexOf(' ');
           const targetStr = firstSpaceIdx !== -1 ? textAfterCmd.substring(0, firstSpaceIdx) : textAfterCmd;
-          
+
           let targetUserId = parseInt(targetStr, 10);
           if (targetStr?.startsWith('ticket_')) {
             const ticket = storage.getContactTickets().find(t => t.id === targetStr);
             if (ticket) targetUserId = ticket.userId;
           }
 
-          const msgBodyHtml = this.extractFormattedHtml(msg, /^\/(msg|cavab)\s+\S+\s*/i);
+          const msgBodyHtml = this.extractFormattedHtml(msg, /^\/(msg|cavab)(?:@\S+)?\s+\S+\s*/i);
 
           if (isNaN(targetUserId) || !msgBodyHtml) {
             await this.sendSafeHtml(chatId, 'İstifadə: <code>/msg &lt;userId&gt; &lt;mesajınız&gt;</code> və ya <code>/cavab &lt;ticket_id&gt; &lt;cavab&gt;</code>');
@@ -1222,23 +1315,23 @@ export class TelegramBotService {
             await this.sendSafeHtml(chatId, 'Bu əmr yalnız qruplarda işləyir.');
             return;
           }
-          const isAdmin = await this.checkIsAdmin(chatId, msg.from?.id);
+          const isAdmin = await this.checkIsAdmin(chatId, msg.from?.id, msg);
           if (isAdmin || this.isOwner(msg.from)) {
-            await this.handleTagAll(chatId);
+            await this.handleTagAll(chatId, msg);
           } else {
-            await this.sendSafeHtml(chatId, '⛔ Bu əmr yalnız qrup adminləri üçündür.');
+            await this.sendSafeHtml(chatId, '⛔ Bu əmr yalnız qrup adminləri üçündür.', replyOpts);
           }
           return;
         }
 
         if (cmd === 'analiz') {
-          await this.handleAnaliz(chatId);
+          await this.handleAnaliz(chatId, msg, isGroup);
           return;
         }
 
         if (cmd === 'sil') {
           if (isGroup && msg.reply_to_message) {
-            const isAdmin = await this.checkIsAdmin(chatId, msg.from?.id);
+            const isAdmin = await this.checkIsAdmin(chatId, msg.from?.id, msg);
             if (isAdmin || this.isOwner(msg.from)) {
               await this.deleteTelegramMessage(chatId, msg.reply_to_message.message_id);
               await this.deleteTelegramMessage(chatId, msg.message_id);
@@ -1249,7 +1342,7 @@ export class TelegramBotService {
       }
 
       // 7. Check if admin was writing an elan
-      if (this.isOwner(msg.from) && this.pendingAdminElan.get(chatId) && (msg.text || msg.caption)) {
+      if (!isGroup && this.isOwner(msg.from) && this.pendingAdminElan.get(chatId) && (msg.text || msg.caption)) {
         this.pendingAdminElan.delete(chatId);
         const formattedHtml = this.extractFormattedHtml(msg);
         if (!formattedHtml) {
@@ -1260,8 +1353,8 @@ export class TelegramBotService {
         return;
       }
 
-      // 8. Check if user is in Contact pending mode
-      if (storage.isContactPending(chatId)) {
+      // 8. Check if user is in Contact pending mode (DM only)
+      if (!isGroup && storage.isContactPending(chatId)) {
         await this.relayContactMessage(chatId, msg);
         return;
       }
@@ -1276,23 +1369,34 @@ export class TelegramBotService {
         }
       }
 
-      // 10. Handle Documents (PDF / TXT analysis - ONLY IN PRIVATE CHATS)
-      if (msg.document) {
-        if (isGroup) {
-          // Do not analyze documents in groups to prevent spam and unnecessary trigger
+      // 10. Handle Photos (DM always; Group when captioned @bot, /sorus, /pdf, replied to bot, or /qrupai active)
+      if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+        if (isGroup && !isAddressedToBot) {
           return;
         }
-        await this.handleDocument(chatId, msg);
+        await this.handlePhoto(chatId, userId, msg, isGroup);
         return;
       }
 
-      // 11. Handle Voice/Audio (Transcription)
+      // 11. Handle Documents (PDF / TXT analysis — DM always; Group when @mentioned, /pdf, replied to bot, or /qrupai active)
+      if (msg.document) {
+        if (isGroup && !isAddressedToBot) {
+          return;
+        }
+        await this.handleDocument(chatId, msg, isGroup);
+        return;
+      }
+
+      // 12. Handle Voice/Audio (Transcription — DM always; Group when @mentioned, replied to bot, or /qrupai active)
       if (msg.voice || msg.audio) {
-        await this.handleAudio(chatId, userId, msg);
+        if (isGroup && !isAddressedToBot) {
+          return;
+        }
+        await this.handleAudio(chatId, userId, msg, isGroup);
         return;
       }
 
-      // 12. Conversational AI fallback with Live Status Ticker
+      // 13. Conversational AI fallback with Live Status Ticker
       if (msg.text) {
         await this.handleGeneralText(chatId, userId, msg.text, isGroup, msg);
       }
@@ -1497,31 +1601,73 @@ export class TelegramBotService {
     return chunks;
   }
 
-  // --- REAL-TIME PROGRESSIVE HUMAN-LIKE TYPING STREAM ---
-  public async streamAiReplyWithLiveStatus(chatId: number, userId: number, promptText: string) {
+  // --- REAL-TIME PROGRESSIVE HUMAN-LIKE TYPING STREAM (GROUP-SAFE & DEADLOCK-FREE) ---
+  public async streamAiReplyWithLiveStatus(
+    chatId: number,
+    userId: number,
+    promptText: string,
+    options?: { isGroup?: boolean; msg?: any }
+  ) {
+    const isGroup = options?.isGroup ?? (chatId < 0);
+    const msg = options?.msg;
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+
     const user = storage.getUser(userId);
     const config = storage.getConfig();
     const persona = geminiService.getPersona(user?.roleplayPersona || config.roleplayMode);
 
-    // 1. Immediately indicate typing in Telegram header
+    let senderRole: string | undefined;
+    if (msg?.from) {
+      if (this.isOwner(msg.from)) {
+        senderRole = 'AAQ Baş Rəhbər (Owner)';
+      } else if (isGroup) {
+        const isAdm = await this.checkIsAdmin(chatId, msg.from?.id, msg);
+        senderRole = isAdm ? 'Qrup Admini' : 'Qrup Üzvü';
+      }
+    }
+    const groupInfo = isGroup ? storage.getGroup(chatId) : undefined;
+    const replyMsg = msg?.reply_to_message;
+    const replyToText = replyMsg?.text || replyMsg?.caption || undefined;
+    const replyToSender = replyMsg?.from ? this.getUserName(replyMsg.from) : undefined;
+
+    const runtimeCtx: ChatRuntimeContext = {
+      isGroup,
+      chatId,
+      groupTitle: msg?.chat?.title || groupInfo?.title,
+      groupRules: isGroup ? storage.getGroupRules(chatId) : null,
+      senderName: msg?.from ? this.getUserName(msg.from) : user?.first_name,
+      senderUsername: msg?.from?.username || user?.username,
+      senderRole,
+      senderMessageCount: user?.messageCount,
+      replyToText: replyToText ? String(replyToText).slice(0, 800) : undefined,
+      replyToSender,
+      historyKey: isGroup ? chatId : userId
+    };
+
+    // 1. Send typing action cleanly + bounded 45s safety stop
+    const startedAt = Date.now();
     await this.sendChatAction(chatId, 'typing').catch(() => {});
 
-    // 2. Keep typing heartbeat active while preparing
     let isDone = false;
     const typingHeartbeat = setInterval(() => {
-      if (isDone) return;
+      if (isDone || Date.now() - startedAt > 45000) {
+        clearInterval(typingHeartbeat);
+        return;
+      }
       this.sendChatAction(chatId, 'typing').catch(() => {});
-    }, 3000);
+    }, 3800);
 
-    // 3. Send initial message matching the active persona's voice
+    // 2. Send initial placeholder message matching active persona
     let initialMsg: any = null;
     try {
-      initialMsg = await this.sendSafeHtml(
-        chatId,
-        `${persona.typingLabel} ▌`
-      );
-    } catch {
-      // ignore
+      const floodUntil = this.chatFloodUntil.get(chatId) || 0;
+      if (Date.now() >= floodUntil) {
+        initialMsg = await this.sendSafeHtml(chatId, `${persona.typingLabel} ▌`, replyOpts);
+      }
+    } catch (initErr: any) {
+      storage.addLog('error', `İlkin status mesajı xətası (Chat: ${chatId}): ${initErr?.message || initErr}`);
     }
 
     const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
@@ -1546,104 +1692,177 @@ export class TelegramBotService {
       ]
     };
 
+    const minEditIntervalMs = isGroup ? 1750 : 850;
+    const minCharDelta = isGroup ? 35 : 15;
+    const maxLiveEdits = isGroup ? 5 : 18;
+    let liveEditCount = 0;
     let lastEditTime = 0;
-    let dynamicIntervalMs = 680;
+    let lastRenderedLen = 0;
     let lastRenderedText = '';
+    let editQueue: Promise<void> = Promise.resolve();
 
     try {
       const finalReply = await geminiService.generateChatReplyStream(
         userId,
         promptText,
         async (currentText: string, isFinal: boolean) => {
-          if (!initialMsg || !initialMsg.message_id) return;
-          const now = Date.now();
-
           if (isFinal) {
+            isDone = true;
+            clearInterval(typingHeartbeat);
+
+            await editQueue.catch(() => {});
+
             const formattedFinal = this.formatAiOutputForTelegramHtml(currentText, false);
             const chunks = this.splitLongText(formattedFinal, 3950);
             const firstChunk = chunks[0] || formattedFinal;
+
+            let delivered = false;
+            if (initialMsg?.message_id) {
+              const firstMarkup = chunks.length === 1 ? { reply_markup: keyboard } : {};
+              try {
+                await this.apiCall('editMessageText', {
+                  chat_id: chatId,
+                  message_id: initialMsg.message_id,
+                  text: firstChunk,
+                  parse_mode: 'HTML',
+                  ...firstMarkup
+                });
+                delivered = true;
+              } catch (err: any) {
+                const errStr = err?.message || '';
+                if (errStr.includes('message is not modified')) {
+                  delivered = true;
+                } else if (err?.errorCode === 429 || errStr.includes('retry after')) {
+                  const waitSec = Math.min((err?.retryAfter || 3) + 1, 7);
+                  await new Promise(r => setTimeout(r, waitSec * 1000));
+                  try {
+                    await this.apiCall('editMessageText', {
+                      chat_id: chatId,
+                      message_id: initialMsg.message_id,
+                      text: firstChunk,
+                      parse_mode: 'HTML',
+                      ...firstMarkup
+                    });
+                    delivered = true;
+                  } catch {
+                    // fall through to sendSafeHtml below
+                  }
+                } else {
+                  const plainFirst = firstChunk.replace(/<[^>]+>/g, '');
+                  try {
+                    await this.apiCall('editMessageText', {
+                      chat_id: chatId,
+                      message_id: initialMsg.message_id,
+                      text: plainFirst,
+                      ...firstMarkup
+                    });
+                    delivered = true;
+                  } catch {
+                    // fall through to sendSafeHtml below
+                  }
+                }
+              }
+            }
+
+            if (!delivered) {
+              try {
+                await this.sendSafeHtml(chatId, firstChunk, {
+                  ...replyOpts,
+                  ...(chunks.length === 1 ? { reply_markup: keyboard } : {})
+                });
+                delivered = true;
+                if (initialMsg?.message_id) {
+                  await this.deleteTelegramMessage(chatId, initialMsg.message_id);
+                }
+              } catch (sendErr: any) {
+                storage.addLog('error', `Yekun cavab göndərilmədi (Chat: ${chatId}): ${sendErr?.message || sendErr}`);
+              }
+            }
+
+            for (let i = 1; i < chunks.length; i++) {
+              const isLast = i === chunks.length - 1;
+              await this.sendSafeHtml(chatId, chunks[i], {
+                ...replyOpts,
+                ...(isLast ? { reply_markup: keyboard } : {})
+              }).catch(() => {});
+            }
+            return;
+          }
+
+          // Intermediate live stream edit (strictly rate-limited & serialized)
+          if (!initialMsg?.message_id || isDone) return;
+          if (liveEditCount >= maxLiveEdits) return;
+          if (Date.now() < (this.chatFloodUntil.get(chatId) || 0)) return;
+
+          const now = Date.now();
+          if (
+            now - lastEditTime < minEditIntervalMs ||
+            currentText === lastRenderedText ||
+            currentText.length - lastRenderedLen < minCharDelta
+          ) {
+            return;
+          }
+
+          lastEditTime = now;
+          lastRenderedLen = currentText.length;
+          lastRenderedText = currentText;
+          liveEditCount++;
+
+          const snapshot = currentText;
+          editQueue = editQueue.then(async () => {
+            if (isDone || Date.now() < (this.chatFloodUntil.get(chatId) || 0)) return;
+            const formattedLive = this.formatAiOutputForTelegramHtml(snapshot, true);
+            const previewText = formattedLive.length > 3800 ? formattedLive.slice(0, 3800) + '...' : formattedLive;
 
             try {
               await this.apiCall('editMessageText', {
                 chat_id: chatId,
                 message_id: initialMsg.message_id,
-                text: firstChunk,
-                parse_mode: 'HTML',
-                ...(chunks.length === 1 ? { reply_markup: keyboard } : {})
+                text: `${previewText} ▌`,
+                parse_mode: 'HTML'
               });
-            } catch (err: any) {
-              if (!err?.message?.includes('message is not modified')) {
-                const plainFirst = firstChunk.replace(/<[^>]+>/g, '');
+            } catch (editErr: any) {
+              const msgStr = editErr?.message || '';
+              if (editErr?.errorCode === 429 || msgStr.includes('Too Many Requests') || msgStr.includes('retry after')) {
+                liveEditCount = maxLiveEdits; // stop further intermediate edits on this turn
+              } else if (!msgStr.includes('message is not modified')) {
+                const plainLive = snapshot.replace(/<[^>]*>/g, '').slice(0, 3800);
                 await this.apiCall('editMessageText', {
                   chat_id: chatId,
                   message_id: initialMsg.message_id,
-                  text: plainFirst,
-                  ...(chunks.length === 1 ? { reply_markup: keyboard } : {})
-                }).catch(async () => {
-                  await this.sendSafeHtml(chatId, firstChunk, chunks.length === 1 ? { reply_markup: keyboard } : {}).catch(() => {});
-                });
+                  text: `${plainLive} ▌`
+                }).catch(() => {});
               }
             }
-
-            // Send continuation chunks if reply exceeded 3950 chars
-            for (let i = 1; i < chunks.length; i++) {
-              const isLast = i === chunks.length - 1;
-              await this.sendSafeHtml(chatId, chunks[i], isLast ? { reply_markup: keyboard } : {}).catch(() => {});
-            }
-          } else {
-            if (now - lastEditTime >= dynamicIntervalMs && currentText !== lastRenderedText && currentText.length > 8) {
-              lastEditTime = now;
-              lastRenderedText = currentText;
-              const formattedLive = this.formatAiOutputForTelegramHtml(currentText, true);
-              const previewText = formattedLive.length > 3800 ? formattedLive.slice(0, 3800) + '...' : formattedLive;
-
-              try {
-                await this.apiCall('editMessageText', {
-                  chat_id: chatId,
-                  message_id: initialMsg.message_id,
-                  text: `${previewText} ▌`,
-                  parse_mode: 'HTML'
-                });
-              } catch (editErr: any) {
-                const msgStr = editErr?.message || '';
-                if (msgStr.includes('Too Many Requests') || msgStr.includes('retry after')) {
-                  dynamicIntervalMs = Math.min(2500, dynamicIntervalMs + 500);
-                } else {
-                  try {
-                    const plainLive = currentText.replace(/<[^>]*>/g, '').slice(0, 3800);
-                    await this.apiCall('editMessageText', {
-                      chat_id: chatId,
-                      message_id: initialMsg.message_id,
-                      text: `${plainLive} ▌`
-                    });
-                  } catch {
-                    // ignore transient edit collision
-                  }
-                }
-              }
-            }
-          }
-        }
+          });
+        },
+        undefined,
+        undefined,
+        runtimeCtx
       );
 
-      isDone = true;
-      clearInterval(typingHeartbeat);
       return finalReply;
     } catch (err: any) {
-      isDone = true;
-      clearInterval(typingHeartbeat);
-      if (initialMsg && initialMsg.message_id) {
-        await this.apiCall('editMessageText', {
+      storage.addLog('error', `AI cavab axını xətası (Chat: ${chatId}): ${err?.message || err}`);
+      await editQueue.catch(() => {});
+      const errText = `⚠️ Cavab hazırlanarkən müvəqqəti xəta baş verdi. Zəhmət olmasa yenidən cəhd edin və ya <code>/model</code> ilə model seçin.`;
+      if (initialMsg?.message_id) {
+        const edited = await this.apiCall('editMessageText', {
           chat_id: chatId,
           message_id: initialMsg.message_id,
-          text: `⚠️ Cavab hazırlanarkən müvəqqəti xəta baş verdi. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.`
-        }).catch(() => {});
+          text: errText,
+          parse_mode: 'HTML'
+        }).then(() => true).catch(() => false);
+        if (!edited) {
+          await this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {});
+          await this.deleteTelegramMessage(chatId, initialMsg.message_id);
+        }
       } else {
-        await this.sendSafeHtml(
-          chatId,
-          `⚠️ Cavab hazırlanarkən müvəqqəti xəta baş verdi. Zəhmət olmasa bir qədər sonra yenidən cəhd edin.`
-        );
+        await this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {});
       }
+    } finally {
+      isDone = true;
+      clearInterval(typingHeartbeat);
     }
   }
 
@@ -1657,26 +1876,121 @@ export class TelegramBotService {
   ) {
     if (isGroup) {
       const isAddressed =
-        this.hasBotMention(text, this.botIdentity.username) ||
-        (msg.reply_to_message && msg.reply_to_message.from?.id === this.botIdentity.id);
+        this.hasBotMention(text, this.botIdentity.username, msg) ||
+        this.isRepliedToBot(msg) ||
+        storage.isGroupAiAlwaysActive(chatId);
 
       if (!isAddressed) return;
     }
 
-    const cleanText = text
-      .replace(new RegExp(`@${this.botIdentity.username}`, 'gi'), '')
-      .trim();
+    let cleanText = text;
+    if (this.botIdentity.username) {
+      const escaped = this.botIdentity.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      cleanText = cleanText.replace(new RegExp(`@${escaped}`, 'gi'), '').trim();
+    }
 
-    if (!cleanText) return;
+    if (!cleanText) {
+      const replyRef = msg?.reply_to_message?.text || msg?.reply_to_message?.caption;
+      if (replyRef) {
+        cleanText = 'Zəhmət olmasa cavab verilən bu mesajı dərindən analiz et və cavablandır.';
+      } else {
+        const senderName = this.escapeHtml(this.getUserName(msg?.from));
+        const replyOpts = msg?.message_id
+          ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+          : {};
+        await this.sendSafeHtml(
+          chatId,
+          `👋 Salam, <b>${senderName}</b>! Mən buradayam və sizi dinləyirəm.\n\nSualınızı <code>@${this.botIdentity.username || 'AAQ_Al_bot'} &lt;sualınız&gt;</code> yazaraq və ya mesajıma <b>Reply (Cavab)</b> edərək ünvanlaya bilərsiniz.`,
+          replyOpts
+        );
+        return;
+      }
+    }
 
-    await this.streamAiReplyWithLiveStatus(chatId, userId, cleanText);
+    await this.streamAiReplyWithLiveStatus(chatId, userId, cleanText, { isGroup, msg });
   }
 
-  // --- DOCUMENT (PDF) HANDLER ---
-  private async handleDocument(chatId: number, msg: any) {
+  // --- PHOTO / IMAGE HANDLER ---
+  private async handlePhoto(chatId: number, userId: number, msg: any, isGroup: boolean = false) {
+    const photos = msg.photo || [];
+    const largest = photos[photos.length - 1];
+    if (!largest?.file_id) return;
+
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+
+    let captionPrompt = (msg.caption || '').trim();
+    if (this.botIdentity.username && captionPrompt) {
+      const escaped = this.botIdentity.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      captionPrompt = captionPrompt.replace(new RegExp(`@${escaped}`, 'gi'), '').trim();
+    }
+    captionPrompt = captionPrompt.replace(/^\/(sorus|sual|pdf|analiz)(?:@\S+)?\s*/i, '').trim();
+
+    const finalPrompt =
+      captionPrompt ||
+      'Bu şəkli dərindən analiz et: içindəki mətni oxu (varsa), əsas məqamları izah et və elmi-maarif üslubunda Azərbaycan dilində cavablandır.';
+
+    const statusMsg = await this.sendSafeHtml(
+      chatId,
+      '🖼️ <i>Şəkil qəbul edildi, vizual AI analizi aparılır...</i>',
+      replyOpts
+    );
+    await this.sendChatAction(chatId, 'typing');
+
+    try {
+      const fileInfo = await this.apiCall('getFile', { file_id: largest.file_id });
+      const fileUrl = `https://api.telegram.org/file/bot${this.token}/${fileInfo.file_path}`;
+      const fileRes = await fetch(fileUrl, { signal: AbortSignal.timeout(15000) });
+      const arrayBuffer = await fileRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const rawAnalysis = await geminiService.analyzeVisionOrPdf(buffer, 'image/jpeg', finalPrompt);
+      const formatted = this.formatAiOutputForTelegramHtml(rawAnalysis, false);
+      const responseText = `🖼️ <b>Vizual Analiz:</b>\n\n${formatted}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
+      const chunks = this.splitLongText(responseText, 3950);
+
+      if (statusMsg?.message_id) {
+        try {
+          await this.apiCall('editMessageText', {
+            chat_id: chatId,
+            message_id: statusMsg.message_id,
+            text: chunks[0],
+            parse_mode: 'HTML'
+          });
+          for (let i = 1; i < chunks.length; i++) {
+            await this.sendSafeHtml(chatId, chunks[i], replyOpts);
+          }
+          return;
+        } catch {
+          // fallback below
+        }
+      }
+      for (const chunk of chunks) {
+        await this.sendSafeHtml(chatId, chunk, replyOpts);
+      }
+    } catch (err: any) {
+      const errText = `❌ Şəkil analiz edilərkən xəta baş verdi: ${err?.message || err}`;
+      if (statusMsg?.message_id) {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: statusMsg.message_id,
+          text: errText
+        }).catch(() => this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {}));
+      } else {
+        await this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {});
+      }
+    }
+  }
+
+  // --- DOCUMENT (PDF / TXT) HANDLER ---
+  private async handleDocument(chatId: number, msg: any, isGroup: boolean = false) {
     const doc = msg.document;
     const mimeType = doc.mime_type || '';
     const fileName = doc.file_name || 'fayl';
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
 
     const isPdf = mimeType === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
     const isText = mimeType.startsWith('text/') || fileName.toLowerCase().endsWith('.txt');
@@ -1684,25 +1998,36 @@ export class TelegramBotService {
     if (!isPdf && !isText) {
       await this.sendSafeHtml(
         chatId,
-        '📑 Zəhmət olmasa təhlil üçün <b>PDF</b> və ya <b>Mətn (.txt)</b> faylı göndərin.'
+        '📑 Zəhmət olmasa təhlil üçün <b>PDF</b> və ya <b>Mətn (.txt)</b> faylı göndərin.',
+        replyOpts
       );
       return;
     }
 
     const statusMsg = await this.sendSafeHtml(
       chatId,
-      `⏳ <i>"${this.escapeHtml(fileName)}" faylı qəbul edildi, dərindən analiz olunur...</i>`
+      `⏳ <i>"${this.escapeHtml(fileName)}" faylı qəbul edildi, dərindən analiz olunur...</i>`,
+      replyOpts
     );
     await this.sendChatAction(chatId, 'typing');
 
     try {
       const fileInfo = await this.apiCall('getFile', { file_id: doc.file_id });
       const fileUrl = `https://api.telegram.org/file/bot${this.token}/${fileInfo.file_path}`;
-      const fileRes = await fetch(fileUrl);
+      const fileRes = await fetch(fileUrl, { signal: AbortSignal.timeout(18000) });
       const arrayBuffer = await fileRes.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      const userPrompt = msg.caption || 'Bu sənədin əsas məğzini çıxar, vacib punktları qeyd et və aydın xülasə təqdim et.';
+      let userPrompt = (msg.caption || '').trim();
+      if (this.botIdentity.username && userPrompt) {
+        const escaped = this.botIdentity.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        userPrompt = userPrompt.replace(new RegExp(`@${escaped}`, 'gi'), '').trim();
+      }
+      userPrompt = userPrompt.replace(/^\/(pdf|sorus|sual|analiz)(?:@\S+)?\s*/i, '').trim();
+      if (!userPrompt) {
+        userPrompt = 'Bu sənədin əsas məğzini çıxar, vacib punktları qeyd et və aydın xülasə təqdim et.';
+      }
+
       const rawAnalysis = await geminiService.analyzeVisionOrPdf(
         buffer,
         isPdf ? 'application/pdf' : 'text/plain',
@@ -1722,81 +2047,133 @@ export class TelegramBotService {
             parse_mode: 'HTML'
           });
           for (let i = 1; i < chunks.length; i++) {
-            await this.sendSafeHtml(chatId, chunks[i]);
+            await this.sendSafeHtml(chatId, chunks[i], replyOpts);
           }
+          return;
         } catch {
-          for (const chunk of chunks) {
-            await this.sendSafeHtml(chatId, chunk);
-          }
-        }
-      } else {
-        for (const chunk of chunks) {
-          await this.sendSafeHtml(chatId, chunk);
+          // fallback below
         }
       }
+      for (const chunk of chunks) {
+        await this.sendSafeHtml(chatId, chunk, replyOpts);
+      }
     } catch (err: any) {
-      await this.sendSafeHtml(
-        chatId,
-        `❌ Sənəd analiz edilərkən xəta baş verdi: ${err?.message || err}`
-      );
+      const errText = `❌ Sənəd analiz edilərkən xəta baş verdi: ${err?.message || err}`;
+      if (statusMsg?.message_id) {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: statusMsg.message_id,
+          text: errText
+        }).catch(() => this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {}));
+      } else {
+        await this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {});
+      }
     }
   }
 
   // --- AUDIO / VOICE HANDLER ---
-  private async handleAudio(chatId: number, userId: number, msg: any) {
+  private async handleAudio(chatId: number, userId: number, msg: any, isGroup: boolean = false) {
     const audioObj = msg.voice || msg.audio;
     if (!audioObj) return;
 
-    const statusMsg = await this.sendSafeHtml(chatId, '🎙️ <i>Səsli mesaj dinlənilir və mətnə çevrilir...</i>');
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+
+    const statusMsg = await this.sendSafeHtml(chatId, '🎙️ <i>Səsli mesaj dinlənilir və mətnə çevrilir...</i>', replyOpts);
     await this.sendChatAction(chatId, 'typing');
 
     try {
       const fileInfo = await this.apiCall('getFile', { file_id: audioObj.file_id });
       const fileUrl = `https://api.telegram.org/file/bot${this.token}/${fileInfo.file_path}`;
-      const fileRes = await fetch(fileUrl);
+      const fileRes = await fetch(fileUrl, { signal: AbortSignal.timeout(18000) });
       const arrayBuffer = await fileRes.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
       const transcribedText = await geminiService.transcribeAudio(buffer, audioObj.mime_type || 'audio/ogg');
 
       if (!transcribedText) {
-        await this.sendSafeHtml(chatId, '⚠️ Səsli mesajda anlaşılan nitq aşkar edilmədi.');
+        const noSpeechMsg = '⚠️ Səsli mesajda anlaşılan nitq aşkar edilmədi.';
+        if (statusMsg?.message_id) {
+          await this.apiCall('editMessageText', {
+            chat_id: chatId,
+            message_id: statusMsg.message_id,
+            text: noSpeechMsg
+          }).catch(() => this.sendSafeHtml(chatId, noSpeechMsg, replyOpts));
+        } else {
+          await this.sendSafeHtml(chatId, noSpeechMsg, replyOpts);
+        }
         return;
       }
 
-      await this.sendSafeHtml(
+      const groupInfo = isGroup ? storage.getGroup(chatId) : undefined;
+      const runtimeCtx: ChatRuntimeContext = {
+        isGroup,
         chatId,
-        `🗣️ <b>Səsli Mesajınız Mətndə:</b>\n<i>"${this.escapeHtml(transcribedText)}"</i>`
-      );
+        groupTitle: msg?.chat?.title || groupInfo?.title,
+        groupRules: isGroup ? storage.getGroupRules(chatId) : null,
+        senderName: msg?.from ? this.getUserName(msg.from) : undefined,
+        senderUsername: msg?.from?.username,
+        historyKey: isGroup ? chatId : userId
+      };
 
-      // Now process as AI question
-      const aiReply = await geminiService.generateChatReply(userId, transcribedText);
+      const aiReply = await geminiService.generateChatReply(userId, transcribedText, undefined, undefined, runtimeCtx);
       const formattedAudioReply = this.formatAiOutputForTelegramHtml(aiReply, false);
-      await this.sendSafeHtml(chatId, `🤖 <b>AAQ AI Cavabı:</b>\n\n${formattedAudioReply}`);
+      const finalMsg = `🗣️ <b>Səsli Mesaj:</b> <i>"${this.escapeHtml(transcribedText)}"</i>\n\n🤖 <b>AAQ AI Cavabı:</b>\n\n${formattedAudioReply}`;
+      const chunks = this.splitLongText(finalMsg, 3950);
+
+      if (statusMsg?.message_id) {
+        const edited = await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: statusMsg.message_id,
+          text: chunks[0],
+          parse_mode: 'HTML'
+        }).then(() => true).catch(() => false);
+        if (edited) {
+          for (let i = 1; i < chunks.length; i++) {
+            await this.sendSafeHtml(chatId, chunks[i], replyOpts);
+          }
+          return;
+        }
+      }
+      for (const chunk of chunks) {
+        await this.sendSafeHtml(chatId, chunk, replyOpts);
+      }
     } catch (err: any) {
-      await this.sendSafeHtml(chatId, `❌ Səsli mesaj emal edilə bilmədi: ${err?.message || err}`);
+      const errText = `❌ Səsli mesaj emal edilə bilmədi: ${err?.message || err}`;
+      if (statusMsg?.message_id) {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: statusMsg.message_id,
+          text: errText
+        }).catch(() => this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {}));
+      } else {
+        await this.sendSafeHtml(chatId, errText, replyOpts).catch(() => {});
+      }
     }
   }
 
   // --- PUBLIC COMMAND HANDLERS ---
-  private async handleStart(chatId: number, user: TelegramUser, isOwnerUser: boolean) {
+  private async handleStart(chatId: number, user: TelegramUser, isOwnerUser: boolean, isGroup: boolean = false) {
     storage.acceptTerms(chatId);
 
     const config = storage.getConfig();
     const activeModelId = user.selectedModel || config.model;
     const modelDef = AVAILABLE_MODELS.find(m => m.id === activeModelId) || AVAILABLE_MODELS[0];
 
-    const welcome = `Salam, <b>${this.escapeHtml(user.first_name || 'Dəyərli İstifadəçi')}</b>! 👋
+    const welcome = isGroup
+      ? `Salam, dəyərli qrup üzvləri! 👋\n\n🏛️ <b>"AAQ - Ahl Al Qalam"</b> intellektual AI və qrup köməkçisi bu qrupda tam gücü ilə aktivdir!\n\n⚡ <b>Aktiv Model:</b> <b>${modelDef.name}</b>\n💬 <b>Məndən istifadə:</b> <code>@${this.botIdentity.username || 'AAQ_Al_bot'} &lt;sual&gt;</code>, mesajıma <b>Reply</b> və ya <code>/sorus &lt;sual&gt;</code>.\n⚙️ Adminlər üçün bütün mesajlara açıq AI rejimi: <code>/qrupai ac</code>`
+      : `Salam, <b>${this.escapeHtml(user.first_name || 'Dəyərli İstifadəçi')}</b>! 👋
 
 🏛️ <b>"AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm)</b> elmi-maarif birliyinin rəsmi süni intellekt və köməkçi platformasına xoş gəlmisiniz!
 
 📢 <b>Rəsmi Kanalımız:</b> ${OFFICIAL_CHANNEL_URL}
-⚡ <b>Aktiv Gemini Modeli:</b> <b>${modelDef.name}</b>
+⚡ <b>Aktiv AI Modeli:</b> <b>${modelDef.name}</b>
 
 Aşağıdakı bölmələrdən modeli dəyişə və ya əmrlərdən dərhal istifadə edə bilərsiniz:`;
 
     const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
-    const webAppRow = appUrl.startsWith('https://')
+    const webAppRow = !isGroup && appUrl.startsWith('https://')
       ? [[{ text: '🌐 İnteraktiv Veb Panel (Mini App)', web_app: { url: appUrl } }]]
       : [];
 
@@ -1834,15 +2211,18 @@ Aşağıdakı bölmələrdən modeli dəyişə və ya əmrlərdən dərhal istif
   }
 
   private async handleHelp(chatId: number, isOwnerUser: boolean) {
+    const botUser = this.botIdentity.username || 'AAQ_Al_bot';
     const msg = `📖 <b>AAQ - AHL AL QALAM RƏSMİ ƏMR TƏLİMATI</b>
 
 🏛️ <b>Təşkilat:</b> AAQ - Ahl Al Qalam (AAG Əhl-ül Qələm)
 📢 <b>Rəsmi Kanal:</b> ${OFFICIAL_CHANNEL_URL}
 
-🤖 <b>Süni İntellekt & Analiz:</b>
-• <code>/sorus &lt;sual&gt;</code> — Seçilmiş AI modelindən sürətli və dəqiq cavab alın
-• <code>/pdf</code> — PDF sənədlərini analiz edin və xülasə çıxarın
-• <code>/model</code> — Aktiv AI modelini dəyişin (Gemini Flash, DeepSeek R1/V3, Llama 3.3, Qwen 2.5, Groq)
+🤖 <b>Süni İntellekt & Qrup İnteqrasiyası:</b>
+• <code>@${botUser} &lt;sual&gt;</code> və ya bota <b>Reply</b> — Qrupda və DM-də ani AI cavabı
+• <code>/sorus &lt;sual&gt;</code> — Seçilmiş AI modelindən ətraflı cavab alın (Reply ilə də işləyir)
+• <code>/qrupai [ac|bagla]</code> — Qrupda bütün mesajlara AI rejimi (Admin)
+• <code>/pdf</code> — PDF/Mətn və Şəkil analizi (DM və ya qrupda <code>@${botUser}</code> / Reply ilə)
+• <code>/model</code> — Aktiv AI modelini dəyişin (Gemini Flash, OpenRouter, Nemotron, Gemma, Groq)
 • <code>/roleplay</code> — AI xarakterini dəyişin (Müdrik Filosof, Proqramçı, Müəllim...)
 • <code>/clear</code> — Söhbət yaddaşını təmizləyin
 • <code>/stats</code> — Sistemin oyaq qalma və model statistikası
@@ -1989,24 +2369,30 @@ Bu bələdçi <b>AAQ - Ahl Al Qalam</b> tərəfindən abituriyentlərə və təl
     await this.sendSafeHtml(chatId, dimGuide, { reply_markup: keyboard });
   }
 
-  private async handlePdfInstruction(chatId: number, isGroup: boolean = false) {
+  private async handlePdfInstruction(chatId: number, isGroup: boolean = false, extra: any = {}) {
+    const botUser = this.botIdentity.username || 'AAQ_Al_bot';
     if (isGroup) {
       await this.sendSafeHtml(
         chatId,
-        `📑 <b>PDF Analiz Xidməti:</b>\n\nQrupda sənəd və bildiriş sıxlığının qarşısını almaq üçün PDF analiz funksiyası yalnız <b>Şəxsi Çatda (DM)</b> aktivdir.\n\n👉 Botun özünə (@${this.botIdentity.username || 'bot'}) şəxsi mesajda PDF faylınızı göndərərək dərhal xülasə və analiz ala bilərsiniz!`
+        `📑 <b>PDF, Mətn və Şəkil Analizi (Qrupda və DM-də):</b>\n\n` +
+          `Qrupda sənəd və ya şəkil analiz etmək üçün:\n` +
+          `1. PDF / <code>.txt</code> / Şəklin açıqlamasında (caption) <code>@${botUser}</code> qeyd edin;\n` +
+          `2. Və ya mənim mesajıma <b>Reply</b> edərək faylı göndərin.\n\n` +
+          `👉 İstəsəniz birbaşa şəxsi çatda (@${botUser}) da göndərə bilərsiniz.`,
+        extra
       );
       return;
     }
 
-    const text = `📑 <b>PDF SƏNƏD ANALİZİ VƏ XÜLASƏ ÇIXARILMASI</b>
+    const text = `📑 <b>PDF, MƏTN VƏ ŞƏKİL ANALİZİ</b>
 
-Botumuza istənilən PDF və ya mətn sənədini göndərərək aşağıdakı əməliyyatları apara bilərsiniz:
+Botumuza istənilən PDF, <code>.txt</code> və ya şəkil göndərərək aşağıdakı əməliyyatları apara bilərsiniz:
 
-1. 📄 <b>PDF Xülasəsi:</b> Sənədi bu çata göndərin, bot məzmunu oxuyub əsas tezisləri çıxarsın.
-2. ❓ <b>Sənəd üzrə Sual-Cavab:</b> PDF faylını göndərərkən (caption-da) sənədin içindəki mövzular barədə sualınızı qeyd edin.
-3. 📝 <b>Bölmə Analizi:</b> PDF-in müəyyən fəsillərinin izahını tələb edin.
+1. 📄 <b>PDF / Mətn Xülasəsi:</b> Sənədi bu çata göndərin, bot məzmunu oxuyub əsas tezisləri çıxarsın.
+2. 🖼️ <b>Şəkil Analizi & OCR:</b> Məsələ, mətn və ya diaqram şəklini göndərin, bot oxuyub izah etsin.
+3. ❓ <b>Caption üzrə Sual-Cavab:</b> Fayl və ya şəklin açıqlamasında xüsusi tapşırığınızı yazın.
 
-👉 <i>İndi PDF faylını bu çata birbaşa göndərə bilərsiniz!</i>`;
+👉 <i>İndi fayl və ya şəkli bu çata birbaşa göndərə bilərsiniz!</i>`;
 
     const keyboard = {
       inline_keyboard: [
@@ -2017,13 +2403,17 @@ Botumuza istənilən PDF və ya mətn sənədini göndərərək aşağıdakı ə
       ]
     };
 
-    await this.sendSafeHtml(chatId, text, { reply_markup: keyboard });
+    await this.sendSafeHtml(chatId, text, { reply_markup: keyboard, ...extra });
   }
 
   private async handleInfo(chatId: number, msg: any, isGroup: boolean) {
     if (isGroup) {
       const chat = msg.chat;
-      const text = `ℹ️ <b>QRUP MƏLUMATI</b>\n\n🏷️ <b>Qrup Adı:</b> ${this.escapeHtml(chat.title || '')}\n🆔 <b>Chat ID:</b> <code>${chat.id}</code>\n👥 <b>Növ:</b> ${chat.type}\n🛡️ <b>Qoruma:</b> Aktiv (Anti-Söyüş, Anti-Link, Anti-Spam)`;
+      const aiMode = storage.isGroupAiAlwaysActive(chatId)
+        ? '🟢 Bütün mesajlarda aktiv'
+        : '🔵 Standart (@tag, Reply və /əmrlər)';
+      const membersCount = storage.getGroupMembers(chatId).length;
+      const text = `ℹ️ <b>QRUP MƏLUMATI</b>\n\n🏷️ <b>Qrup Adı:</b> ${this.escapeHtml(chat.title || '')}\n🆔 <b>Chat ID:</b> <code>${chat.id}</code>\n👥 <b>Növ:</b> ${chat.type}\n🤖 <b>Qrup AI Rejimi:</b> ${aiMode}\n📌 <b>Aktiv Qeydli Üzvlər:</b> ${membersCount} nəfər\n🛡️ <b>Qoruma:</b> Aktiv (Anti-Söyüş, Anti-Link, Anti-Spam)`;
       await this.sendSafeHtml(chatId, text);
     } else {
       const config = storage.getConfig();
@@ -2049,16 +2439,70 @@ Botumuza istənilən PDF və ya mətn sənədini göndərərək aşağıdakı ə
     }
   }
 
-  private async showGroupRules(chatId: number) {
+  private async showGroupRules(chatId: number, extra: any = {}) {
     const rules = storage.getGroupRules(chatId);
     if (rules) {
-      await this.sendSafeHtml(chatId, `📜 <b>QRUP QAYDALARI:</b>\n\n${this.escapeHtml(rules)}`);
+      await this.sendSafeHtml(chatId, `📜 <b>QRUP QAYDALARI:</b>\n\n${this.escapeHtml(rules)}`, extra);
     } else {
       await this.sendSafeHtml(
         chatId,
-        'ℹ️ Bu qrup üçün xüsusi qaydalar hələ qeyd edilməyib.\nAdminlər <code>/qayda &lt;mətn&gt;</code> ilə qayda təyin edə bilər.'
+        'ℹ️ Bu qrup üçün xüsusi qaydalar hələ qeyd edilməyib.\nAdminlər <code>/qayda &lt;mətn&gt;</code> ilə qayda təyin edə bilər.',
+        extra
       );
     }
+  }
+
+  private async handleQrupAi(chatId: number, msg: any, isGroup: boolean, text: string) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+
+    if (!isGroup) {
+      await this.sendSafeHtml(chatId, 'ℹ️ <code>/qrupai</code> əmri yalnız qruplarda istifadə olunur.', replyOpts);
+      return;
+    }
+
+    const isAdmin = await this.checkIsAdmin(chatId, msg.from?.id, msg);
+    if (!isAdmin && !this.isOwner(msg.from)) {
+      await this.sendSafeHtml(chatId, '⛔ Bu əmr yalnız qrup adminləri üçündür.', replyOpts);
+      return;
+    }
+
+    const arg = text.replace(/^\/qrupai(?:@\S+)?\s*/i, '').trim().toLowerCase();
+    if (['ac', 'aç', 'on', 'aktiv', '1', 'enable'].includes(arg)) {
+      storage.setGroupAiAlwaysActive(chatId, true);
+      await this.sendSafeHtml(
+        chatId,
+        '🟢 <b>Qrup AI Rejimi: TAM AKTİV EDİLDİ</b>\n\nBot artıq bu qrupda @tag gözləmədən bütün ümumi mesajları dinləyib cavablandıracaq.\n<i>Standart rejimə qayıtmaq üçün: <code>/qrupai bagla</code></i>',
+        replyOpts
+      );
+      return;
+    }
+
+    if (['bagla', 'bağla', 'off', 'deaktiv', '0', 'disable', 'standart'].includes(arg)) {
+      storage.setGroupAiAlwaysActive(chatId, false);
+      await this.sendSafeHtml(
+        chatId,
+        `🔵 <b>Qrup AI Rejimi: STANDART REJİM</b>\n\nBot qrupda yalnız <code>@${this.botIdentity.username || 'AAQ_Al_bot'}</code> işarələndikdə, mesajına <b>Reply</b> edildikdə və ya <code>/sorus</code> kimi əmrlər yazıldıqda cavab verəcək.`,
+        replyOpts
+      );
+      return;
+    }
+
+    const activeNow = storage.isGroupAiAlwaysActive(chatId);
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: `${activeNow ? '✅ ' : ''}🟢 Bütün Mesajlarda Aç`, callback_data: 'qrupai_on' },
+          { text: `${!activeNow ? '✅ ' : ''}🔵 Standart (@tag/Reply)`, callback_data: 'qrupai_off' }
+        ]
+      ]
+    };
+    await this.sendSafeHtml(
+      chatId,
+      `⚙️ <b>QRUP SÜNİ İNTELLEKT REJİMİ</b>\n\nHazırkı vəziyyət: <b>${activeNow ? '🟢 Bütün mesajlarda aktiv' : '🔵 Standart (@tag, Reply və /əmrlər)'}</b>\n\nİstifadə: <code>/qrupai ac</code> və ya <code>/qrupai bagla</code>`,
+      { ...replyOpts, reply_markup: keyboard }
+    );
   }
 
   private async handleAktivlik(chatId: number, isGroup: boolean) {
@@ -2082,16 +2526,15 @@ Botumuza istənilən PDF və ya mətn sənədini göndərərək aşağıdakı ə
     await this.sendSafeHtml(chatId, fullText);
   }
 
-
-
   private async handleNewMembers(chatId: number, newMembers: any[]) {
     for (const m of newMembers) {
       if (m.is_bot && m.id === this.botIdentity.id) {
         await this.sendSafeHtml(
           chatId,
-          `Salam hamıya! 👋 Mən <b>"AAQ - Ahl Al Qalam"</b> tərəfindən hazırlanmış köməkçi və moderasiya botuyam.\n📢 Rəsmi kanal: ${OFFICIAL_CHANNEL_URL}\nQaydalar üçün <code>/qayda</code> yaza bilərsiniz.`
+          `Salam hamıya! 👋 Mən <b>"AAQ - Ahl Al Qalam"</b> tərəfindən hazırlanmış AI köməkçi və moderasiya botuyam.\n📢 Rəsmi kanal: ${OFFICIAL_CHANNEL_URL}\n🤖 Sual üçün: <code>@${this.botIdentity.username || 'AAQ_Al_bot'} &lt;sual&gt;</code> və ya <code>/sorus</code>\n📜 Qaydalar üçün <code>/qayda</code> yaza bilərsiniz.`
         );
-      } else {
+      } else if (!m.is_bot) {
+        storage.recordGroupMember(chatId, m);
         const name = this.getUserName(m);
         await this.sendSafeHtml(
           chatId,
@@ -2101,77 +2544,205 @@ Botumuza istənilən PDF və ya mətn sənədini göndərərək aşağıdakı ə
     }
   }
 
-  private async handleTagAll(chatId: number) {
-    await this.sendSafeHtml(
-      chatId,
-      '📢 <b>Diqqət bütün qrup üzvləri!</b> 📢\n\nAdmin tərəfindən hamı söhbətə dəvət olunur. Zəhmət olmasa aktiv olun! ✨'
-    );
-  }
+  private async handleTagAll(chatId: number, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    const customNote = (msg?.text || '').replace(/^\/(tagall|all)(?:@\S+)?\s*/i, '').trim();
+    const members = storage.getGroupMembers(chatId);
 
-  private async handleAnaliz(chatId: number) {
-    const fullText = `📊 <b>AAQ Qrup Analizi:</b>\n\nQrupda müsbət intellektual mühit müşahidə olunur. Üzvlərin elm və müzakirələrdə aktivliyi tövsiyə edilir.\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-    await this.sendSafeHtml(chatId, fullText);
-  }
-
-  private async handleSorus(chatId: number, userId: number, text: string) {
-    const query = text.replace(/^\/(sorus|sual)\s*/i, '').trim();
-    if (!query) {
-      await this.sendSafeHtml(chatId, 'Zəhmət olmasa sualınızı qeyd edin.\nNümunə: <code>/sorus Kvant fizikası nədir?</code>');
+    if (members.length === 0) {
+      await this.sendSafeHtml(
+        chatId,
+        `📢 <b>Diqqət bütün qrup üzvləri!</b>\n\n${customNote ? `💬 ${this.escapeHtml(customNote)}\n\n` : ''}Admin tərəfindən hamı söhbətə dəvət olunur. Zəhmət olmasa aktiv olun! ✨`,
+        replyOpts
+      );
       return;
     }
 
-    await this.streamAiReplyWithLiveStatus(chatId, userId, query);
+    const mentionTags = members.map(m =>
+      m.username
+        ? `@${m.username}`
+        : `<a href="tg://user?id=${m.id}">${this.escapeHtml(m.first_name || 'Üzv')}</a>`
+    );
+
+    const chunkSize = 30;
+    for (let i = 0; i < mentionTags.length; i += chunkSize) {
+      const slice = mentionTags.slice(i, i + chunkSize);
+      const header =
+        i === 0
+          ? `📢 <b>Diqqət bütün qrup üzvləri!</b>${customNote ? `\n💬 ${this.escapeHtml(customNote)}` : ''}\n\n`
+          : '';
+      await this.sendSafeHtml(chatId, `${header}${slice.join(' ')}`, i === 0 ? replyOpts : {});
+    }
   }
 
-  private async handleQuiz(chatId: number) {
-    const quizText = `🧠 <b>Günün Viktorinası:</b>
+  private async handleAnaliz(chatId: number, msg?: any, isGroup: boolean = false) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    const groupInfo = isGroup ? storage.getGroup(chatId) : undefined;
+    const members = isGroup ? storage.getGroupMembers(chatId) : [];
+    const recentHistory = storage.getChatHistory(isGroup ? chatId : msg?.from?.id || chatId);
 
-❓ <i>"Leyli və Məcnun" Şərqdə və İslam dünyasında ilk opera hansı bəstəkar tərəfindən və neçənci ildə yazılmışdır?</i>
+    let aiSummary = '';
+    if (recentHistory.length >= 2) {
+      try {
+        const digest = recentHistory
+          .slice(-8)
+          .map(m => `${m.role === 'user' ? 'Üzv' : 'AAQ AI'}: ${m.text.slice(0, 140)}`)
+          .join('\n');
+        const raw = await geminiService.quickPrompt(
+          `Bu qrupun/söhbətin son dialoqlarını 2-3 qısa cümlə ilə intellektual analiz et (əsas mövzu və ab-hava):\n${digest}`
+        );
+        aiSummary = `\n\n🧠 <b>AI Mövzu Analizi:</b>\n${this.formatAiOutputForTelegramHtml(raw, false)}`;
+      } catch {}
+    }
 
-A) Qara Qarayev (1915)
-B) Üzeyir Hacıbəyli (1908)
-C) Müslüm Maqomayev (1912)
-D) Fikrət Əmirov (1920)
+    const fullText = `📊 <b>AAQ ${isGroup ? 'QRUP' : 'SÖHBƏT'} ANALİZİ</b>\n\n` +
+      (groupInfo ? `🏷️ <b>Qrup:</b> ${this.escapeHtml(groupInfo.title)}\n` : '') +
+      `💬 <b>Toplam qrup mesajı:</b> ${groupInfo?.messageCount || recentHistory.length}\n` +
+      (isGroup ? `👥 <b>Fəal qeydli üzvlər:</b> ${members.length} nəfər\n` : '') +
+      `🧠 <b>Kontekst yaddaşı:</b> ${recentHistory.length} son mesaj\n` +
+      (isGroup ? `🤖 <b>Qrup AI:</b> ${storage.isGroupAiAlwaysActive(chatId) ? '🟢 Bütün mesajlar' : '🔵 Standart (@tag/Reply)'}` : '') +
+      aiSummary +
+      `\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
 
-💡 <i>Doğru cavab: <b>B) Üzeyir Hacıbəyli (1908)</b> — 12 yanvar 1908-ci ildə Bakıda tamaşaya qoyulmuşdur.</i>`;
+    await this.sendSafeHtml(chatId, fullText, replyOpts);
+  }
+
+  private async handleSorus(chatId: number, userId: number, text: string, isGroup: boolean = false, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    let query = text.replace(/^\/(sorus|sual)(?:@\S+)?\s*/i, '').trim();
+    if (!query) {
+      const replied = msg?.reply_to_message?.text || msg?.reply_to_message?.caption;
+      if (replied) {
+        query = 'Cavab verilən bu mesajı dərindən izah et və cavablandır.';
+      } else {
+        await this.sendSafeHtml(
+          chatId,
+          'Zəhmət olmasa sualınızı qeyd edin.\nNümunə: <code>/sorus Kvant fizikası nədir?</code>',
+          replyOpts
+        );
+        return;
+      }
+    }
+
+    await this.streamAiReplyWithLiveStatus(chatId, userId, query, { isGroup, msg });
+  }
+
+  private static readonly QUIZ_BANK = [
+    {
+      q: '"Leyli və Məcnun" Şərqdə ilk opera hansı bəstəkar tərəfindən və neçənci ildə yazılmışdır?',
+      options: ['Qara Qarayev (1915)', 'Üzeyir Hacıbəyli (1908)', 'Müslüm Maqomayev (1912)', 'Fikrət Əmirov (1920)'],
+      correctIdx: 1,
+      note: '12 yanvar 1908-ci ildə Bakıda səhnəyə qoyulmuşdur.'
+    },
+    {
+      q: 'Azərbaycan Demokratik Cümhuriyyəti hansı tarixdə elan edilmişdir?',
+      options: ['28 May 1918', '18 Oktyabr 1991', '28 Aprel 1920', '15 İyun 1993'],
+      correctIdx: 0,
+      note: 'Şərqdə ilk demokratik parlamentli respublika Tiflisdə elan edilmişdir.'
+    },
+    {
+      q: 'Nizami Gəncəvinin "Xəmsə"sinə daxil olan birinci poema hansıdır?',
+      options: ['Xosrov və Şirin', 'Sirlər xəzinəsi', 'Yeddi gözəl', 'İsgəndərnamə'],
+      correctIdx: 1,
+      note: '"Məxzənül-əsrar" (Sirlər xəzinəsi) 1174-cü ildə yazılmışdır.'
+    },
+    {
+      q: 'İşığın vakuumdakı sürəti saniyədə təxminən neçə kilometrdir?',
+      options: ['150 000 km/s', '300 000 km/s', '450 000 km/s', '1 000 000 km/s'],
+      correctIdx: 1,
+      note: 'Dəqiq qiymət c ≈ 299 792 km/s təşkil edir.'
+    },
+    {
+      q: 'Məhəmməd Füzulinin məşhur türkdilli "Şikayətnamə" əsəri hansı janrdadır?',
+      options: ['Məktub / Satirik nəsr', 'Qəsidə', 'Məsnəvi', 'Dram'],
+      correctIdx: 0,
+      note: 'Ədəbiyyatımızda satirik bədii nəsrin ilk parlaq nümunələrindəndir.'
+    },
+    {
+      q: 'Kimyəvi elementlərin dövri sistemində ən yüngül element hansıdır?',
+      options: ['Helium (He)', 'Litium (Li)', 'Hidrogen (H)', 'Karbon (C)'],
+      correctIdx: 2,
+      note: 'Hidrogen (H) dövri cədvəldə 1-ci atom nömrəsinə malikdir.'
+    }
+  ];
+
+  private async handleQuiz(chatId: number, extra: any = {}) {
+    const idx = Math.floor(Math.random() * TelegramBotService.QUIZ_BANK.length);
+    const item = TelegramBotService.QUIZ_BANK[idx];
+    const letters = ['A', 'B', 'C', 'D'];
+
+    const quizText = `🧠 <b>AAQ İNTELLEKTUAL VİKTORİNA:</b>\n\n❓ <i>${this.escapeHtml(item.q)}</i>\n\n` +
+      item.options.map((opt, i) => `<b>${letters[i]})</b> ${this.escapeHtml(opt)}`).join('\n') +
+      `\n\n👉 <i>Doğru variantı aşağıdakı düymələrdən seçin:</i>`;
 
     const keyboard = {
       inline_keyboard: [
+        [
+          { text: 'A', callback_data: `quiz_ans_${idx}_0` },
+          { text: 'B', callback_data: `quiz_ans_${idx}_1` },
+          { text: 'C', callback_data: `quiz_ans_${idx}_2` },
+          { text: 'D', callback_data: `quiz_ans_${idx}_3` }
+        ],
         [
           { text: '🔄 Başqa Viktorina', callback_data: 'cmd_quiz' },
           { text: '💡 Maraqlı Fakt', callback_data: 'cmd_fakt' }
         ],
         [
-          { text: '📢 AAQ Kanalı', url: OFFICIAL_CHANNEL_URL },
-          { text: '🏠 Əsas Menyu', callback_data: 'nav_main_menu' }
+          { text: '📢 AAQ Kanalı', url: OFFICIAL_CHANNEL_URL }
         ]
       ]
     };
 
-    await this.sendSafeHtml(chatId, quizText, { reply_markup: keyboard });
+    await this.sendSafeHtml(chatId, quizText, { reply_markup: keyboard, ...extra });
   }
 
-  private async handleTercume(chatId: number, text: string) {
-    const query = text.replace(/^\/(tercume|tərcümə)\s*/i, '').trim();
+  private async handleTercume(chatId: number, text: string, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    let query = text.replace(/^\/(tercume|tərcümə)(?:@\S+)?\s*/i, '').trim();
     if (!query) {
-      await this.sendSafeHtml(chatId, 'Zəhmət olmasa tərcümə olunacaq mətni daxil edin.\nNümunə: <code>/tercume Welcome to our scientific community</code>');
+      query = (msg?.reply_to_message?.text || msg?.reply_to_message?.caption || '').trim();
+    }
+    if (!query) {
+      await this.sendSafeHtml(
+        chatId,
+        'Zəhmət olmasa tərcümə olunacaq mətni daxil edin və ya hər hansı mesaja <b>Reply</b> edərək <code>/tercume</code> yazın.\nNümunə: <code>/tercume Welcome to our scientific community</code>',
+        replyOpts
+      );
       return;
     }
 
     await this.sendChatAction(chatId, 'typing');
     const translationRaw = await geminiService.quickPrompt(
-      `Aşağıdakı mətni ən səlis və peşəkar formada Azərbaycan dilinə tərcümə et:\n"${query}"`
+      `Aşağıdakı mətni ən səlis və peşəkar formada Azərbaycan dilinə (əgər mətn Azərbaycan dilindədirsə, İngilis dilinə) tərcümə et:\n"${query}"`
     );
     const translation = this.formatAiOutputForTelegramHtml(translationRaw, false);
 
     const fullText = `🌍 <b>Tərcümə:</b>\n\n${translation}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-    await this.sendSafeHtml(chatId, fullText);
+    await this.sendSafeHtml(chatId, fullText, replyOpts);
   }
 
-  private async handleXulas(chatId: number, text: string) {
-    const query = text.replace(/^\/(xulas|xülasə)\s*/i, '').trim();
+  private async handleXulas(chatId: number, text: string, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    let query = text.replace(/^\/(xulas|xülasə)(?:@\S+)?\s*/i, '').trim();
     if (!query) {
-      await this.sendSafeHtml(chatId, 'Zəhmət olmasa xülasə ediləcək mətni daxil edin.\nNümunə: <code>/xulas [uzun mətn]</code>');
+      query = (msg?.reply_to_message?.text || msg?.reply_to_message?.caption || '').trim();
+    }
+    if (!query) {
+      await this.sendSafeHtml(
+        chatId,
+        'Zəhmət olmasa xülasə ediləcək mətni daxil edin və ya uzun bir mesaja <b>Reply</b> edərək <code>/xulas</code> yazın.',
+        replyOpts
+      );
       return;
     }
 
@@ -2182,51 +2753,62 @@ D) Fikrət Əmirov (1920)
     const summary = this.formatAiOutputForTelegramHtml(summaryRaw, false);
 
     const fullText = `📝 <b>Qısa Xülasə:</b>\n\n${summary}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-    await this.sendSafeHtml(chatId, fullText);
+    await this.sendSafeHtml(chatId, fullText, replyOpts);
   }
 
   // --- /hesabla FUNCTION ---
-  private async handleHesabla(chatId: number, text: string) {
-    const query = text.replace(/^\/hesabla\s*/i, '').trim();
+  private async handleHesabla(chatId: number, text: string, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    let query = text.replace(/^\/hesabla(?:@\S+)?\s*/i, '').trim();
+    if (!query) {
+      query = (msg?.reply_to_message?.text || msg?.reply_to_message?.caption || '').trim();
+    }
     if (!query) {
       await this.sendSafeHtml(
         chatId,
-        '🔢 <b>Riyazi Hesablama Xidməti</b>\n\nZəhmət olmasa riyazi ifadə və ya tənliyi daxil edin.\nNümunələr:\n• <code>/hesabla (145 * 24) / 12 + 5^3</code>\n• <code>/hesabla 2x + 5 = 25</code>\n• <code>/hesabla 15% * 450</code>\n• <code>/hesabla sqrt(144) + 25</code>'
+        '🔢 <b>Riyazi Hesablama Xidməti</b>\n\nZəhmət olmasa riyazi ifadə və ya tənliyi daxil edin.\nNümunələr:\n• <code>/hesabla (145 * 24) / 12 + 5^3</code>\n• <code>/hesabla 2x + 5 = 25</code>\n• <code>/hesabla 15% * 450</code>\n• <code>/hesabla sqrt(144) + 25</code>',
+        replyOpts
       );
       return;
     }
 
-    // Solve via safe math engine first
     const mathRes = solveMathExpression(query);
 
     if (mathRes.success && mathRes.steps) {
       const fullText = `🔢 <b>Riyazi Hesablama Nəticəsi:</b>\n\n${mathRes.steps.join('\n')}\n\n✅ <b>Nəticə:</b> <code>${mathRes.result}</code>\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-      await this.sendSafeHtml(chatId, fullText);
+      await this.sendSafeHtml(chatId, fullText, replyOpts);
       return;
     }
 
-    // If symbolic or word problem, solve with AI
     await this.sendChatAction(chatId, 'typing');
     const resultRaw = await geminiService.quickPrompt(
       `Riyazi tapşırıq: "${query}". Dəqiq hesabla, addım-addım həll yolunu izah et və yekun cavabı ver.`
     );
     const result = this.formatAiOutputForTelegramHtml(resultRaw, false);
     const fullText = `🔢 <b>Riyazi Hesablama Nəticəsi:</b>\n\n${result}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-    await this.sendSafeHtml(chatId, fullText);
+    await this.sendSafeHtml(chatId, fullText, replyOpts);
   }
 
   // --- /sozluk FUNCTION ---
-  private async handleSozluk(chatId: number, text: string) {
-    const query = text.replace(/^\/(sozluk|sözlük)\s*/i, '').trim();
+  private async handleSozluk(chatId: number, text: string, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    let query = text.replace(/^\/(sozluk|sözlük)(?:@\S+)?\s*/i, '').trim();
+    if (!query) {
+      query = (msg?.reply_to_message?.text || '').trim();
+    }
     if (!query) {
       await this.sendSafeHtml(
         chatId,
-        '📖 <b>Azərbaycan İzahlı Lüğəti</b>\n\nZəhmət olmasa axtardığınız sözü qeyd edin.\nNümunə: <code>/sozluk maarif</code> və ya <code>/sozluk intellekt</code>'
+        '📖 <b>Azərbaycan İzahlı Lüğəti</b>\n\nZəhmət olmasa axtardığınız sözü qeyd edin.\nNümunə: <code>/sozluk maarif</code> və ya <code>/sozluk intellekt</code>',
+        replyOpts
       );
       return;
     }
 
-    // Check local high-precision dictionary first
     const localDef = lookupWord(query);
     if (localDef) {
       const fullText = `📖 <b>Azərbaycan İzahlı Lüğəti: "${localDef.word}"</b>
@@ -2239,11 +2821,10 @@ D) Fikrət Əmirov (1920)
 ✍️ <b>Nümunə:</b> <i>"${localDef.example}"</i>
 
 🏛️ <i>AAQ - Ahl Al Qalam Maarif Mərkəzi</i>`;
-      await this.sendSafeHtml(chatId, fullText);
+      await this.sendSafeHtml(chatId, fullText, replyOpts);
       return;
     }
 
-    // Fallback to AI
     await this.sendChatAction(chatId, 'typing');
     const prompt = `"${query}" sözü üçün Azərbaycan dilinin izahlı lüğətinə uyğun məlumat hazırla:
 1. Mənası və izahı
@@ -2254,12 +2835,15 @@ D) Fikrət Əmirov (1920)
     const defRaw = await geminiService.quickPrompt(prompt);
     const def = this.formatAiOutputForTelegramHtml(defRaw, false);
     const fullText = `📖 <b>Azərbaycan İzahlı Lüğəti ("${this.escapeHtml(query)}"):</b>\n\n${def}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-    await this.sendSafeHtml(chatId, fullText);
+    await this.sendSafeHtml(chatId, fullText, replyOpts);
   }
 
   // --- /hava FUNCTION ---
-  private async handleHava(chatId: number, text: string) {
-    const cityName = text.replace(/^\/hava\s*/i, '').trim() || 'Bakı';
+  private async handleHava(chatId: number, text: string, msg?: any) {
+    const replyOpts = msg?.message_id
+      ? { reply_to_message_id: msg.message_id, allow_sending_without_reply: true }
+      : {};
+    const cityName = text.replace(/^\/hava(?:@\S+)?\s*/i, '').trim() || 'Bakı';
 
     let liveData = null;
     try {
@@ -2296,7 +2880,7 @@ D) Fikrət Əmirov (1920)
 
 🏛️ <i>AAQ - Ahl Al Qalam Canlı Məlumat Sistemi</i>`;
 
-      await this.sendSafeHtml(chatId, fullText);
+      await this.sendSafeHtml(chatId, fullText, replyOpts);
     } else {
       await this.sendChatAction(chatId, 'typing');
       const aiWeatherRaw = await geminiService.quickPrompt(
@@ -2304,7 +2888,7 @@ D) Fikrət Əmirov (1920)
       );
       const aiWeather = this.formatAiOutputForTelegramHtml(aiWeatherRaw, false);
       const fullText = `🌤️ <b>HAVA MƏLUMATI: ${this.escapeHtml(cityName.toUpperCase())}</b>\n\n${aiWeather}\n\n🏛️ <i>AAQ - Ahl Al Qalam</i>`;
-      await this.sendSafeHtml(chatId, fullText);
+      await this.sendSafeHtml(chatId, fullText, replyOpts);
     }
   }
 
@@ -2663,7 +3247,7 @@ Artıq botun bütün süni intellekt, elmi və moderasiya imkanlarından yenidə
   }
 
   // --- MODEL AND ROLEPLAY MENUS ---
-  private async handleModelMenu(chatId: number, userId: number) {
+  private async handleModelMenu(chatId: number, userId: number, extra: any = {}) {
     const user = storage.getUser(userId);
     const config = storage.getConfig();
     const activeModelId = user?.selectedModel || config.model;
@@ -2688,14 +3272,15 @@ Artıq botun bütün süni intellekt, elmi və moderasiya imkanlarından yenidə
 
 Hazırda aktiv modeliniz: <b>${activeDef?.name || activeModelId}</b>
 
-Aşağıdakı modellərdən (Google Gemini, DeepSeek, Llama, Qwen, Groq) birini seçərək botun cavabvermə intellektini və üslubunu təyin edə bilərsiniz:`;
+Aşağıdakı modellərdən birini seçərək botun cavabvermə intellektini və üslubunu təyin edə bilərsiniz:`;
 
     await this.sendSafeHtml(chatId, text, {
-      reply_markup: { inline_keyboard: buttons }
+      reply_markup: { inline_keyboard: buttons },
+      ...extra
     });
   }
 
-  private async handleRoleplayMenu(chatId: number, userId: number) {
+  private async handleRoleplayMenu(chatId: number, userId: number, extra: any = {}) {
     const user = storage.getUser(userId);
     const config = storage.getConfig();
     const activePersonaId = user?.roleplayPersona || config.roleplayMode;
@@ -2724,7 +3309,8 @@ Hazırkı xarakter: <b>${activePersona.icon} ${activePersona.name}</b>
 Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obraza keçəcək</b> və onun dili, xarakteri və baxış bucağı ilə danışacaq:`;
 
     await this.sendSafeHtml(chatId, text, {
-      reply_markup: { inline_keyboard: buttons }
+      reply_markup: { inline_keyboard: buttons },
+      ...extra
     });
   }
 
@@ -2732,24 +3318,84 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
   private async handleCallbackQuery(cb: any) {
     const data = cb.data;
     const chatId = cb.message?.chat?.id;
-    const userId = cb.from?.id;
+    const isGroup = cb.message?.chat?.type === 'group' || cb.message?.chat?.type === 'supergroup';
+    const userId = cb.from?.id || chatId;
     const msgId = cb.message?.message_id;
 
     if (!chatId || !data) return;
 
     try {
+      // Handle interactive quiz button directly with popup feedback
+      if (data.startsWith('quiz_ans_')) {
+        const parts = data.split('_');
+        const qIdx = Number(parts[2]);
+        const chosenIdx = Number(parts[3]);
+        const item = TelegramBotService.QUIZ_BANK[qIdx];
+        if (!item) {
+          await this.apiCall('answerCallbackQuery', { callback_query_id: cb.id, text: 'Viktorina yeniləndi.' });
+          return;
+        }
+        const letters = ['A', 'B', 'C', 'D'];
+        const isCorrect = chosenIdx === item.correctIdx;
+        const alertText = isCorrect
+          ? `✅ Afərin! Doğru cavab: ${letters[item.correctIdx]}) ${item.options[item.correctIdx]}.\n\n${item.note}`
+          : `❌ Təəssüf! Doğru cavab: ${letters[item.correctIdx]}) ${item.options[item.correctIdx]}.\n\n${item.note}`;
+        await this.apiCall('answerCallbackQuery', {
+          callback_query_id: cb.id,
+          text: alertText.slice(0, 195),
+          show_alert: true
+        });
+        return;
+      }
+
+      if (data === 'qrupai_on' || data === 'qrupai_off') {
+        const isAdmin = await this.checkIsAdmin(chatId, userId);
+        if (!isAdmin && !this.isOwner(cb.from)) {
+          await this.apiCall('answerCallbackQuery', {
+            callback_query_id: cb.id,
+            text: '⛔ Bu tənzimləmə yalnız qrup adminləri üçündür.',
+            show_alert: true
+          });
+          return;
+        }
+        const enableAll = data === 'qrupai_on';
+        storage.setGroupAiAlwaysActive(chatId, enableAll);
+        await this.apiCall('answerCallbackQuery', {
+          callback_query_id: cb.id,
+          text: enableAll ? '🟢 Bütün qrup mesajlarında AI aktiv edildi!' : '🔵 Standart rejim (@tag / Reply) seçildi.'
+        });
+        if (msgId) {
+          const keyboard = {
+            inline_keyboard: [
+              [
+                { text: `${enableAll ? '✅ ' : ''}🟢 Bütün Mesajlarda Aç`, callback_data: 'qrupai_on' },
+                { text: `${!enableAll ? '✅ ' : ''}🔵 Standart (@tag/Reply)`, callback_data: 'qrupai_off' }
+              ]
+            ]
+          };
+          await this.apiCall('editMessageText', {
+            chat_id: chatId,
+            message_id: msgId,
+            text: `⚙️ <b>QRUP SÜNİ İNTELLEKT REJİMİ</b>\n\nHazırkı vəziyyət: <b>${enableAll ? '🟢 Bütün mesajlarda aktiv' : '🔵 Standart (@tag, Reply və /əmrlər)'}</b>\n\nİstifadə: <code>/qrupai ac</code> və ya <code>/qrupai bagla</code>`,
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+          }).catch(() => {});
+        }
+        return;
+      }
+
       await this.apiCall('answerCallbackQuery', { callback_query_id: cb.id });
 
       if (data === 'accept_terms') {
         storage.acceptTerms(userId);
         const user = storage.getUser(userId) || cb.from;
-        await this.handleStart(chatId, user, this.isOwner(cb.from));
+        await this.handleStart(chatId, user, this.isOwner(cb.from), isGroup);
         return;
       }
 
       if (data === 'nav_main_menu') {
         const user = storage.getUser(userId) || cb.from;
-        await this.handleStart(chatId, user, this.isOwner(cb.from));
+        await this.handleStart(chatId, user, this.isOwner(cb.from), isGroup);
         return;
       }
 
@@ -2761,9 +3407,12 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
       if (data === 'nav_ai_chat') {
         const user = storage.getUser(userId);
         const persona = geminiService.getPersona(user?.roleplayPersona || storage.getConfig().roleplayMode);
+        const botTag = this.botIdentity.username || 'AAQ_Al_bot';
         await this.sendSafeHtml(
           chatId,
-          `${persona.icon} <b>${persona.name}</b> dinləyir:\n\n<i>"${persona.greetingLine}"</i>\n\n👉 Sualınızı birbaşa bura yazın və ya <code>/sorus &lt;sualınız&gt;</code> əmrindən istifadə edin.`
+          isGroup
+            ? `${persona.icon} <b>${persona.name}</b> qrupda aktivdir!\n\n👉 Sualınızı <code>@${botTag} &lt;sualınız&gt;</code> yazaraq, bu mesaja <b>Reply</b> edərək və ya <code>/sorus &lt;sual&gt;</code> əmri ilə verin.`
+            : `${persona.icon} <b>${persona.name}</b> dinləyir:\n\n<i>"${persona.greetingLine}"</i>\n\n👉 Sualınızı birbaşa bura yazın və ya <code>/sorus &lt;sualınız&gt;</code> əmrindən istifadə edin.`
         );
         return;
       }
@@ -2824,13 +3473,20 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
       }
 
       if (data === 'cmd_clear') {
-        storage.clearChatHistory(userId);
+        storage.clearChatHistory(isGroup ? chatId : userId);
         await this.sendSafeHtml(chatId, '🧹 Söhbət yaddaşı təmizləndi!');
         return;
       }
 
       if (data === 'menu_contact') {
-        await this.startContact(chatId);
+        if (isGroup) {
+          await this.sendSafeHtml(
+            chatId,
+            `📞 AAQ Rəhbərliyi ilə əlaqə üçün <code>/elaqe &lt;mesajınız&gt;</code> yazın və ya @${this.botIdentity.username || 'AAQ_Al_bot'} şəxsi çatına keçin.`
+          );
+        } else {
+          await this.startContact(chatId);
+        }
         return;
       }
 
@@ -2852,7 +3508,7 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
 
         await this.sendSafeHtml(
           chatId,
-          `✅ <b>Aktiv AI Modeli Təyin Edildi:</b> ${def?.name || modelId}\n\n<i>İndi suallarınızı birbaşa bu model ən yüksək sürət və dəqiqliklə cavablandıracaq.</i>`,
+          `✅ <b>Aktiv AI Modeli Təyin Edildi (${this.escapeHtml(this.getUserName(cb.from))}):</b> ${def?.name || modelId}\n\n<i>İndi suallarınızı birbaşa bu model ən yüksək sürət və dəqiqliklə cavablandıracaq.</i>`,
           { reply_markup: navKb }
         );
         return;
@@ -2861,8 +3517,7 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
       if (data.startsWith('select_persona_')) {
         const personaId = data.replace('select_persona_', '');
         storage.setUserPersona(userId, personaId);
-        // Clear old conversation context so the new persona takes over 100% cleanly
-        storage.clearChatHistory(userId);
+        storage.clearChatHistory(isGroup ? chatId : userId);
         const persona = geminiService.getPersona(personaId);
         const navKb = {
           inline_keyboard: [
@@ -2877,7 +3532,7 @@ Aşağıdakı şəxsiyyətlərdən birini seçdikdə bot <b>tamamilə həmin obr
         };
         await this.sendSafeHtml(
           chatId,
-          `🎭 <b>XARAKTER KEÇİDİ TAMAMLANDI: ${persona.icon} ${persona.name}</b>\n\n💬 <i>"${persona.greetingLine}"</i>\n\n🧹 <i>Yeni obrazın təmiz üslubu üçün əvvəlki söhbət konteksti yeniləndi. İndi istənilən sualınızı yazın!</i>`,
+          `🎭 <b>XARAKTER KEÇİDİ TAMAMLANDI (${this.escapeHtml(this.getUserName(cb.from))}): ${persona.icon} ${persona.name}</b>\n\n💬 <i>"${persona.greetingLine}"</i>\n\n🧹 <i>Yeni obrazın təmiz üslubu üçün əvvəlki söhbət konteksti yeniləndi. İndi istənilən sualınızı yazın!</i>`,
           { reply_markup: navKb }
         );
         return;

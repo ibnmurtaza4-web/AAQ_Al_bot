@@ -33,7 +33,7 @@ export const BotSimulator: React.FC<BotSimulatorProps> = ({
   personas,
   activePersona,
   models,
-  activeModel = 'gemini-3.8-flash'
+  activeModel = 'gemini-3.1-flash-lite'
 }) => {
   const [messages, setMessages] = useState<SimulatorMessage[]>([
     {

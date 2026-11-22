@@ -11,3 +11,4 @@ coverage/
 data/
 *.local
 .aistudio/
+public/assets/aistudio/

@@ -106,11 +106,76 @@ TAM İMMERSİYA QAYDALARI:
   }
 ];
 
+export interface ChatRuntimeContext {
+  isGroup?: boolean;
+  chatId?: number;
+  groupTitle?: string;
+  groupRules?: string | null;
+  senderName?: string;
+  senderUsername?: string;
+  senderRole?: string;
+  senderMessageCount?: number;
+  replyToText?: string;
+  replyToSender?: string;
+  historyKey?: number;
+}
+
+const LEGACY_MODEL_MAP: Record<string, string> = {
+  'gemini-2.5-flash': 'gemini-3.1-flash-lite',
+  'deepseek/deepseek-r1:free': 'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'deepseek/deepseek-chat:free': 'openrouter/free',
+  'meta-llama/llama-3.3-70b-instruct:free': 'google/gemma-4-31b-it:free',
+  'qwen/qwen-2.5-72b-instruct:free': 'nvidia/nemotron-3.5-lightning:free'
+};
+
 export class GeminiService {
   private ai: GoogleGenAI | null = null;
+  private modelCooldowns = new Map<string, { until: number; reason: string }>();
 
   constructor() {
     this.initClient();
+  }
+
+  private isModelCoolingDown(modelId: string): boolean {
+    const entry = this.modelCooldowns.get(modelId);
+    if (!entry) return false;
+    if (Date.now() >= entry.until) {
+      this.modelCooldowns.delete(modelId);
+      return false;
+    }
+    return true;
+  }
+
+  private markModelError(modelId: string, errMsg: string) {
+    const lower = (errMsg || '').toLowerCase();
+    let durationMs = 2 * 60 * 1000; // default 2 min for transient errors
+    if (lower.includes('404') || lower.includes('not_found') || lower.includes('no longer available')) {
+      durationMs = 6 * 60 * 60 * 1000; // 6 hours for deprecated/404 models
+    } else if (lower.includes('429') || lower.includes('quota') || lower.includes('resource_exhausted')) {
+      durationMs = 10 * 60 * 1000; // 10 min for rate/quota limits
+    }
+    this.modelCooldowns.set(modelId, {
+      until: Date.now() + durationMs,
+      reason: errMsg.slice(0, 120)
+    });
+  }
+
+  private clearModelCooldown(modelId: string) {
+    this.modelCooldowns.delete(modelId);
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timeout (${ms}ms)`)), ms);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   public initClient(): GoogleGenAI | null {
@@ -155,7 +220,8 @@ export class GeminiService {
     cascade: ModelDefinition[];
   } {
     const config = storage.getConfig();
-    const modelKey = (requestedModel || config.model || 'gemini-3.8-flash').trim();
+    const rawKey = (requestedModel || config.model || 'gemini-3.1-flash-lite').trim();
+    const modelKey = LEGACY_MODEL_MAP[rawKey] || rawKey;
 
     const matched =
       AVAILABLE_MODELS.find(
@@ -165,22 +231,28 @@ export class GeminiService {
     const preferredOrderIds = [
       matched.id,
       ...(matched.provider === 'openrouter'
-        ? ['deepseek/deepseek-chat:free', 'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen-2.5-72b-instruct:free']
+        ? ['openrouter/free', 'nvidia/nemotron-3.5-lightning:free', 'google/gemma-4-31b-it:free', 'nvidia/nemotron-3-ultra-550b-a55b:free']
         : []),
       ...(matched.provider === 'groq'
         ? ['llama-3.3-70b-versatile', 'deepseek-r1-distill-llama-70b']
         : []),
-      'gemini-2.5-flash',
+      'gemini-3.1-flash-lite',
       'gemini-3.8-flash',
       'gemini-3.7-flash',
-      'gemini-3.1-flash-lite',
-      'gemini-flash-latest'
+      'gemini-flash-latest',
+      'openrouter/free',
+      'nvidia/nemotron-3.5-lightning:free'
     ];
 
     const uniqueIds = preferredOrderIds.filter((id, idx, arr) => arr.indexOf(id) === idx);
-    const cascade: ModelDefinition[] = uniqueIds
+    const fullList: ModelDefinition[] = uniqueIds
       .map(id => AVAILABLE_MODELS.find(m => m.id === id))
       .filter((m): m is ModelDefinition => Boolean(m));
+
+    // Order healthy (non-cooled-down) models before cooled-down ones while keeping last-resort fallback
+    const healthy = fullList.filter(m => !this.isModelCoolingDown(m.id));
+    const cooled = fullList.filter(m => this.isModelCoolingDown(m.id));
+    const cascade = healthy.length > 0 ? [...healthy, ...cooled] : fullList;
 
     return { primary: matched, cascade };
   }
@@ -203,7 +275,8 @@ export class GeminiService {
 
   private buildSystemInstruction(
     modelDef: ModelDefinition,
-    activePersonaId?: string
+    activePersonaId?: string,
+    ctx?: ChatRuntimeContext
   ): string {
     const config = storage.getConfig();
     const persona = this.getPersona(activePersonaId);
@@ -219,17 +292,46 @@ export class GeminiService {
     const currentYear = now.getFullYear();
     const isoDate = now.toISOString().split('T')[0];
 
+    let conversationContext = '';
+    if (ctx) {
+      const parts: string[] = [];
+      if (ctx.isGroup) {
+        parts.push(`• Mühit: Telegram Qrupu ("${ctx.groupTitle || 'Qrup'}") — cavabların qrup söhbətinə uyğun, yığcam, aydın və oxunaqlı olsun.`);
+        if (ctx.groupRules) {
+          parts.push(`• Qrup Qaydaları: ${ctx.groupRules.slice(0, 400)}`);
+        }
+      } else {
+        parts.push('• Mühit: Şəxsi Çat (DM).');
+      }
+      if (ctx.senderName || ctx.senderUsername) {
+        parts.push(
+          `• Hazırkı Həmsöhbət: ${ctx.senderName || 'İstifadəçi'}` +
+            (ctx.senderUsername ? ` (@${ctx.senderUsername.replace(/^@/, '')})` : '') +
+            (ctx.senderRole ? ` | Status: ${ctx.senderRole}` : '') +
+            (ctx.senderMessageCount ? ` | Aktivlik: ${ctx.senderMessageCount} mesaj` : '')
+        );
+      }
+      if (ctx.replyToText) {
+        parts.push(
+          `• İstifadəçinin Cavab Verdiyi (Reply) Mesaj [${ctx.replyToSender || 'Üzv'}]: "${ctx.replyToText.slice(0, 700)}"`
+        );
+      }
+      if (parts.length > 0) {
+        conversationContext = `\nCANLI SÖHBƏT KONTEKSTİ:\n${parts.join('\n')}\n`;
+      }
+    }
+
     const temporalAndOrgContext = `
 TƏŞKİLAT VƏ MÜHƏRRİK BİLGİSİ:
 • Platforma: "AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm) — ${OFFICIAL_CHANNEL_URL}
 • Aktiv AI Mühərriki: "${modelDef.alias}" (${modelDef.id})
 • Dəqiq Canlı Tarix (Bakı UTC+4): ${azDateStr} (${isoDate}), ${currentYear}-ci il. Sən keçmişdə qalmırsan, cari ili və günü dəqiq bilirsən.
-
+${conversationContext}
 MÜTLƏQ ANTİ-ROBOT QADAĞALARI:
 1. "Bir süni intellekt olaraq...", "Bir dil modeli kimi...", "Mənim hisslərim yoxdur", "Əlbəttə, sizə kömək edə bilərəm!" kimi süni robot ifadələri QƏTİ QADAĞANDIR!
 2. Həqiqi insan danışıq tərzində, səlis və təbii Azərbaycan dilində danış.
 3. Saxta sitat uydurma; admin/rəhbər adlarını şəxsi açıqlama (yalnız "AAQ Rəhbərliyi" de).
-4. Bot əmrləri: /sorus, /sozluk, /hesabla, /hava, /sitat, /tarix, /dim, /pdf, /quiz, /tercume, /xulas, /elaqe, /model, /roleplay, /clear.
+4. Bot əmrləri: /sorus, /sozluk, /hesabla, /hava, /sitat, /tarix, /dim, /pdf, /quiz, /tercume, /xulas, /elaqe, /model, /roleplay, /clear, /qrupai.
 `;
 
     if (persona.id !== 'default') {
@@ -376,7 +478,7 @@ ${config.policyText}`;
         max_tokens: 2048,
         stream: false
       }),
-      signal: AbortSignal.timeout(45000)
+      signal: AbortSignal.timeout(22000)
     });
 
     if (!res.ok) {
@@ -414,7 +516,7 @@ ${config.policyText}`;
         max_tokens: 2048,
         stream: true
       }),
-      signal: AbortSignal.timeout(60000)
+      signal: AbortSignal.timeout(32000)
     });
 
     if (!res.ok || !res.body) {
@@ -428,7 +530,7 @@ ${config.policyText}`;
     let accumulated = '';
 
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await this.withTimeout(reader.read(), 15000, `${provider.toUpperCase()} chunk`);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -501,10 +603,12 @@ ${config.policyText}`;
     userId: number,
     userText: string,
     customPersona?: string,
-    overrideModel?: string
+    overrideModel?: string,
+    ctx?: ChatRuntimeContext
   ): Promise<string> {
     const config = storage.getConfig();
     const user = storage.getUser(userId);
+    const historyKey = ctx?.historyKey ?? userId;
 
     const { primary, cascade } = this.resolveModelInfo(overrideModel || user?.selectedModel || config.model);
     const activePersonaId = customPersona || user?.roleplayPersona || config.roleplayMode;
@@ -512,8 +616,8 @@ ${config.policyText}`;
 
     if (this.isIdentityQuestion(userText)) {
       const reply = this.buildIdentityResponse(primary, persona);
-      storage.addChatMessage(userId, 'user', userText);
-      storage.addChatMessage(userId, 'model', reply);
+      storage.addChatMessage(historyKey, 'user', ctx?.isGroup && ctx.senderName ? `[${ctx.senderName}]: ${userText}` : userText);
+      storage.addChatMessage(historyKey, 'model', reply);
       return reply;
     }
 
@@ -523,8 +627,9 @@ ${config.policyText}`;
       return `⚠️ AI API açarları (<code>GEMINI_API_KEY</code>, <code>OPENROUTER_API_KEY</code> və ya <code>GROQ_API_KEY</code>) mühit dəyişənlərində təyin edilməyib.`;
     }
 
-    const history = storage.getChatHistory(userId);
-    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, userText, persona);
+    const history = storage.getChatHistory(historyKey);
+    const taggedPrompt = ctx?.isGroup && ctx.senderName ? `[${ctx.senderName}]: ${userText}` : userText;
+    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, taggedPrompt, persona);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
     const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
 
@@ -535,19 +640,22 @@ ${config.policyText}`;
         continue;
       }
 
-      const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
+      const targetInstruction = this.buildSystemInstruction(target, activePersonaId, ctx);
 
       if (target.provider === 'openrouter' || target.provider === 'groq') {
         try {
-          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, userText, persona);
+          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, taggedPrompt, persona);
           const replyText = await this.callOpenAICompatible(target.provider, target.id, openAiMsgs, temp);
           if (replyText) {
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', replyText);
+            this.clearModelCooldown(target.id);
+            storage.addChatMessage(historyKey, 'user', taggedPrompt);
+            storage.addChatMessage(historyKey, 'model', replyText);
             return replyText;
           }
         } catch (extErr: any) {
-          storage.addLog('gemini', `Model (${target.id}) xətası: ${extErr?.message || extErr}`);
+          const msg = extErr?.message || String(extErr);
+          this.markModelError(target.id, msg);
+          storage.addLog('gemini', `Model (${target.id}) xətası: ${msg}`);
         }
         continue;
       }
@@ -557,23 +665,28 @@ ${config.policyText}`;
       if (needsSearch && !didAttemptSearch) {
         didAttemptSearch = true;
         try {
-          const response = await client.models.generateContent({
-            model: target.id,
-            contents: sanitizedGeminiContents,
-            config: {
-              systemInstruction: targetInstruction,
-              temperature: temp,
-              tools: [{ googleSearch: {} }]
-            }
-          });
+          const response = await this.withTimeout(
+            client.models.generateContent({
+              model: target.id,
+              contents: sanitizedGeminiContents,
+              config: {
+                systemInstruction: targetInstruction,
+                temperature: temp,
+                tools: [{ googleSearch: {} }]
+              }
+            }),
+            15000,
+            `Gemini Search (${target.id})`
+          );
           let replyText = response.text?.trim();
           if (replyText) {
+            this.clearModelCooldown(target.id);
             const sources = this.extractGroundingSources(response);
             if (sources.length > 0) {
               replyText += `\n\n🌐 <b>Araşdırılan Mənbələr:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
             }
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', replyText);
+            storage.addChatMessage(historyKey, 'user', taggedPrompt);
+            storage.addChatMessage(historyKey, 'model', replyText);
             return replyText;
           }
         } catch (searchErr: any) {
@@ -582,28 +695,35 @@ ${config.policyText}`;
       }
 
       try {
-        const response = await client.models.generateContent({
-          model: target.id,
-          contents: sanitizedGeminiContents,
-          config: {
-            systemInstruction: targetInstruction,
-            temperature: temp
-          }
-        });
+        const response = await this.withTimeout(
+          client.models.generateContent({
+            model: target.id,
+            contents: sanitizedGeminiContents,
+            config: {
+              systemInstruction: targetInstruction,
+              temperature: temp
+            }
+          }),
+          18000,
+          `Gemini (${target.id})`
+        );
         const replyText = response.text?.trim();
         if (replyText) {
-          storage.addChatMessage(userId, 'user', userText);
-          storage.addChatMessage(userId, 'model', replyText);
+          this.clearModelCooldown(target.id);
+          storage.addChatMessage(historyKey, 'user', taggedPrompt);
+          storage.addChatMessage(historyKey, 'model', replyText);
           return replyText;
         }
       } catch (err: any) {
-        storage.addLog('gemini', `Model (${target.id}) xətası: ${err?.message || err}`);
+        const msg = err?.message || String(err);
+        this.markModelError(target.id, msg);
+        storage.addLog('gemini', `Model (${target.id}) xətası: ${msg}`);
       }
     }
 
     const fallbackMsg = `💡 <b>AAQ İntellektual Cavab:</b>\n\n"${userText}" üzrə sorğunuz qəbul edildi, lakin hazırda müvəqqəti yüksək sıxlıq müşahidə olunur. Zəhmət olmasa bir neçə saniyə sonra yenidən cəhd edin və ya <code>/model</code> ilə başqa AI modeli seçin.`;
-    storage.addChatMessage(userId, 'user', userText);
-    storage.addChatMessage(userId, 'model', fallbackMsg);
+    storage.addChatMessage(historyKey, 'user', taggedPrompt);
+    storage.addChatMessage(historyKey, 'model', fallbackMsg);
     return fallbackMsg;
   }
 
@@ -612,10 +732,12 @@ ${config.policyText}`;
     userText: string,
     onProgress: (currentText: string, isFinal: boolean, usedModel?: ModelDefinition) => Promise<void> | void,
     customPersona?: string,
-    overrideModel?: string
+    overrideModel?: string,
+    ctx?: ChatRuntimeContext
   ): Promise<string> {
     const config = storage.getConfig();
     const user = storage.getUser(userId);
+    const historyKey = ctx?.historyKey ?? userId;
 
     const { primary, cascade } = this.resolveModelInfo(overrideModel || user?.selectedModel || config.model);
     const activePersonaId = customPersona || user?.roleplayPersona || config.roleplayMode;
@@ -623,8 +745,8 @@ ${config.policyText}`;
 
     if (this.isIdentityQuestion(userText)) {
       const reply = this.buildIdentityResponse(primary, persona);
-      storage.addChatMessage(userId, 'user', userText);
-      storage.addChatMessage(userId, 'model', reply);
+      storage.addChatMessage(historyKey, 'user', ctx?.isGroup && ctx.senderName ? `[${ctx.senderName}]: ${userText}` : userText);
+      storage.addChatMessage(historyKey, 'model', reply);
       await onProgress(reply, true, primary);
       return reply;
     }
@@ -637,37 +759,46 @@ ${config.policyText}`;
       return fallback;
     }
 
-    const history = storage.getChatHistory(userId);
-    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, userText, persona);
+    const history = storage.getChatHistory(historyKey);
+    const taggedPrompt = ctx?.isGroup && ctx.senderName ? `[${ctx.senderName}]: ${userText}` : userText;
+    const sanitizedGeminiContents = this.buildSanitizedGeminiContents(history, taggedPrompt, persona);
     const needsSearch = config.fastAiMode === false ? true : this.shouldSearchWeb(userText);
     const temp = config.temperature ?? (persona.id === 'wise_poet' || persona.id === 'cyberpunk' ? 0.7 : 0.45);
 
     if (needsSearch && client) {
-      const firstGemini = cascade.find(m => m.provider === 'gemini');
+      const firstGemini = cascade.find(m => m.provider === 'gemini' && !this.isModelCoolingDown(m.id))
+        || cascade.find(m => m.provider === 'gemini');
       if (firstGemini) {
         try {
-          const response = await client.models.generateContent({
-            model: firstGemini.id,
-            contents: sanitizedGeminiContents,
-            config: {
-              systemInstruction: this.buildSystemInstruction(firstGemini, activePersonaId),
-              temperature: temp,
-              tools: [{ googleSearch: {} }]
-            }
-          });
+          const response = await this.withTimeout(
+            client.models.generateContent({
+              model: firstGemini.id,
+              contents: sanitizedGeminiContents,
+              config: {
+                systemInstruction: this.buildSystemInstruction(firstGemini, activePersonaId, ctx),
+                temperature: temp,
+                tools: [{ googleSearch: {} }]
+              }
+            }),
+            14000,
+            `Gemini Search (${firstGemini.id})`
+          );
           let replyText = response.text?.trim();
           if (replyText) {
+            this.clearModelCooldown(firstGemini.id);
             const sources = this.extractGroundingSources(response);
             if (sources.length > 0) {
               replyText += `\n\n🌐 <b>Araşdırılan Mənbələr:</b>\n` + sources.map(s => `• <a href="${s.url}">${s.title}</a>`).join('\n');
             }
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', replyText);
+            storage.addChatMessage(historyKey, 'user', taggedPrompt);
+            storage.addChatMessage(historyKey, 'model', replyText);
             await onProgress(replyText, true, firstGemini);
             return replyText;
           }
         } catch (searchErr: any) {
-          storage.addLog('gemini', `Axtarış xətası (${firstGemini.id}): ${searchErr?.message || searchErr}. Canlı axına keçilir.`);
+          const msg = searchErr?.message || String(searchErr);
+          this.markModelError(firstGemini.id, msg);
+          storage.addLog('gemini', `Axtarış xətası (${firstGemini.id}): ${msg}. Canlı axına keçilir.`);
         }
       }
     }
@@ -677,11 +808,11 @@ ${config.policyText}`;
         continue;
       }
 
-      const targetInstruction = this.buildSystemInstruction(target, activePersonaId);
+      const targetInstruction = this.buildSystemInstruction(target, activePersonaId, ctx);
 
       if (target.provider === 'openrouter' || target.provider === 'groq') {
         try {
-          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, userText, persona);
+          const openAiMsgs = this.buildOpenAIMessages(targetInstruction, history, taggedPrompt, persona);
           const finalText = await this.streamOpenAICompatible(
             target.provider,
             target.id,
@@ -692,15 +823,18 @@ ${config.policyText}`;
             }
           );
           if (finalText) {
-            storage.addChatMessage(userId, 'user', userText);
-            storage.addChatMessage(userId, 'model', finalText);
+            this.clearModelCooldown(target.id);
+            storage.addChatMessage(historyKey, 'user', taggedPrompt);
+            storage.addChatMessage(historyKey, 'model', finalText);
             await onProgress(finalText, true, target);
             return finalText;
           }
         } catch (extStreamErr: any) {
+          const msg = extStreamErr?.message || String(extStreamErr);
+          this.markModelError(target.id, msg);
           storage.addLog(
             'gemini',
-            `Model (${target.id}) canlı axın cəhdi: ${extStreamErr?.message || extStreamErr}. Kaskad davam edir.`
+            `Model (${target.id}) canlı axın cəhdi: ${msg}. Kaskad davam edir.`
           );
         }
         continue;
@@ -709,18 +843,28 @@ ${config.policyText}`;
       if (!client) continue;
 
       try {
-        const responseStream = await client.models.generateContentStream({
-          model: target.id,
-          contents: sanitizedGeminiContents,
-          config: {
-            systemInstruction: targetInstruction,
-            temperature: temp
-          }
-        });
+        const responseStream = await this.withTimeout(
+          client.models.generateContentStream({
+            model: target.id,
+            contents: sanitizedGeminiContents,
+            config: {
+              systemInstruction: targetInstruction,
+              temperature: temp
+            }
+          }),
+          15000,
+          `Gemini Stream Init (${target.id})`
+        );
 
         let accumulatedText = '';
-        for await (const chunk of responseStream) {
-          const chunkText = chunk.text;
+        const streamDeadline = Date.now() + 35000;
+        const iterator = responseStream[Symbol.asyncIterator]();
+
+        while (true) {
+          const remainingMs = Math.min(15000, Math.max(1000, streamDeadline - Date.now()));
+          const nextItem = await this.withTimeout(iterator.next(), remainingMs, `Gemini Stream Chunk (${target.id})`);
+          if (nextItem.done) break;
+          const chunkText = nextItem.value?.text;
           if (chunkText) {
             accumulatedText += chunkText;
             await onProgress(accumulatedText, false, target);
@@ -729,20 +873,23 @@ ${config.policyText}`;
 
         const finalText = accumulatedText.trim();
         if (finalText) {
-          storage.addChatMessage(userId, 'user', userText);
-          storage.addChatMessage(userId, 'model', finalText);
+          this.clearModelCooldown(target.id);
+          storage.addChatMessage(historyKey, 'user', taggedPrompt);
+          storage.addChatMessage(historyKey, 'model', finalText);
           await onProgress(finalText, true, target);
           return finalText;
         }
       } catch (streamErr: any) {
+        const msg = streamErr?.message || String(streamErr);
+        this.markModelError(target.id, msg);
         storage.addLog(
           'gemini',
-          `Model (${target.id}) canlı axın cəhdi: ${streamErr?.message || streamErr}. Kaskad davam edir.`
+          `Model (${target.id}) canlı axın cəhdi: ${msg}. Kaskad davam edir.`
         );
       }
     }
 
-    const fallbackReply = await this.generateChatReply(userId, userText, customPersona, overrideModel);
+    const fallbackReply = await this.generateChatReply(userId, userText, customPersona, overrideModel, ctx);
     await onProgress(fallbackReply, true, primary);
     return fallbackReply;
   }
@@ -758,7 +905,7 @@ ${config.policyText}`;
       return 'Məlumat hazırlandı.';
     }
 
-    const { primary, cascade } = this.resolveModelInfo(modelOverride || 'gemini-2.5-flash');
+    const { primary, cascade } = this.resolveModelInfo(modelOverride || 'gemini-3.1-flash-lite');
     const now = new Date();
     const azDateStr = now.toLocaleDateString('az-AZ', {
       timeZone: 'Asia/Baku',
@@ -787,42 +934,63 @@ ${config.policyText}`;
             ],
             0.3
           );
-          if (txt) return txt;
+          if (txt) {
+            this.clearModelCooldown(target.id);
+            return txt;
+          }
         } catch (err: any) {
-          storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${err?.message || err}`);
+          const msg = err?.message || String(err);
+          this.markModelError(target.id, msg);
+          storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${msg}`);
         }
         continue;
       }
 
       if (!client) continue;
       try {
-        const response = await client.models.generateContent({
-          model: target.id,
-          contents: prompt,
-          config: {
-            systemInstruction: instruction,
-            temperature: 0.3,
-            ...(needsSearch ? { tools: [{ googleSearch: {} }] } : {})
-          }
-        });
+        const response = await this.withTimeout(
+          client.models.generateContent({
+            model: target.id,
+            contents: prompt,
+            config: {
+              systemInstruction: instruction,
+              temperature: 0.3,
+              ...(needsSearch ? { tools: [{ googleSearch: {} }] } : {})
+            }
+          }),
+          15000,
+          `QuickPrompt (${target.id})`
+        );
         const txt = response.text?.trim();
-        if (txt) return txt;
+        if (txt) {
+          this.clearModelCooldown(target.id);
+          return txt;
+        }
       } catch (err: any) {
         if (needsSearch) {
           try {
-            const resNoTools = await client.models.generateContent({
-              model: target.id,
-              contents: prompt,
-              config: {
-                systemInstruction: instruction,
-                temperature: 0.3
-              }
-            });
+            const resNoTools = await this.withTimeout(
+              client.models.generateContent({
+                model: target.id,
+                contents: prompt,
+                config: {
+                  systemInstruction: instruction,
+                  temperature: 0.3
+                }
+              }),
+              15000,
+              `QuickPrompt NoTools (${target.id})`
+            );
             const txtNoTools = resNoTools.text?.trim();
-            if (txtNoTools) return txtNoTools;
+            if (txtNoTools) {
+              this.clearModelCooldown(target.id);
+              return txtNoTools;
+            }
           } catch {}
         }
-        storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${err?.message || err}`);
+        const msg = err?.message || String(err);
+        this.markModelError(target.id, msg);
+        storage.addLog('gemini', `QuickPrompt (${target.id}) cəhdi: ${msg}`);
       }
     }
 
@@ -838,9 +1006,16 @@ ${config.policyText}`;
     if (!client) throw new Error('GEMINI_API_KEY təyin edilməyib.');
 
     const base64Data = buffer.toString('base64');
-    const normalizedMime = mimeType && mimeType.includes('pdf') ? 'application/pdf' : (mimeType || 'application/pdf');
+    const isImage = mimeType.startsWith('image/');
+    const normalizedMime = isImage
+      ? mimeType
+      : mimeType && mimeType.includes('pdf')
+        ? 'application/pdf'
+        : mimeType || 'application/pdf';
 
-    const instruction = `Sən "AAQ - Ahl Al Qalam" tərəfindən təqdim edilən yüksək ixtisaslı sənəd və PDF analitikisən. 
+    const instruction = isImage
+      ? `Sən "AAQ - Ahl Al Qalam" vizual analiz mütəxəssisisən. Şəkildəki mətnləri, düsturları, sualları və ya detalları diqqətlə oxu və aşağıdakı tələbə uyğun Azərbaycan dilində səlis, aydın cavab ver:\nTələb: "${prompt}"`
+      : `Sən "AAQ - Ahl Al Qalam" tərəfindən təqdim edilən yüksək ixtisaslı sənəd və PDF analitikisən.
 Göstərilən sənədin mətnini, cədvəllərini, fəsillərini və məzmununu dərindən oxu və araşdır.
 Tələb: "${prompt}"
 
@@ -849,43 +1024,53 @@ Cavabı Azərbaycan dilində aşağıdakı formatda səlis və dolğun hazırla:
 📑 **Əsas Fəsillər və Vacib Punktlar**
 💡 **Mühüm Qeydlər və Nəticə**`;
 
-    const modelsToTry = ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
-    for (const modelName of modelsToTry) {
+    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-flash-latest']
+      .filter(m => !this.isModelCoolingDown(m));
+    const finalTryList = modelsToTry.length > 0 ? modelsToTry : ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+
+    for (const modelName of finalTryList) {
       try {
-        const response = await client.models.generateContent({
-          model: modelName,
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: normalizedMime,
-                    data: base64Data
+        const response = await this.withTimeout(
+          client.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: normalizedMime,
+                      data: base64Data
+                    }
+                  },
+                  {
+                    text: instruction
                   }
-                },
-                {
-                  text: instruction
-                }
-              ]
+                ]
+              }
+            ],
+            config: {
+              temperature: 0.2
             }
-          ],
-          config: {
-            temperature: 0.2
-          }
-        });
+          }),
+          25000,
+          `Vision/PDF (${modelName})`
+        );
 
         const replyText = response.text?.trim();
         if (replyText) {
-          storage.addLog('gemini', `PDF analizi uğurla tamamlandı (${modelName}).`);
+          this.clearModelCooldown(modelName);
+          storage.addLog('gemini', `${isImage ? 'Şəkil' : 'PDF'} analizi uğurla tamamlandı (${modelName}).`);
           return replyText;
         }
       } catch (err: any) {
-        storage.addLog('error', `PDF model (${modelName}) cəhdi xətası: ${err?.message || err}`);
+        const msg = err?.message || String(err);
+        this.markModelError(modelName, msg);
+        storage.addLog('error', `${isImage ? 'Şəkil' : 'PDF'} model (${modelName}) cəhdi xətası: ${msg}`);
       }
     }
 
-    if (normalizedMime.startsWith('text/') || buffer.length < 500000) {
+    if (normalizedMime.startsWith('text/') || (!isImage && buffer.length < 500000)) {
       try {
         const textContent = buffer.toString('utf-8').replace(/[^\x20-\x7E\u00A0-\u024F\u0400-\u04FF\u1E00-\u1EFF\n\r\t]/g, ' ').slice(0, 30000);
         if (textContent.trim().length > 30) {
@@ -896,7 +1081,7 @@ Cavabı Azərbaycan dilində aşağıdakı formatda səlis və dolğun hazırla:
       } catch {}
     }
 
-    throw new Error('Sənəd modeli tərəfindən oxunub analiz edilə bilmədi. Faylın şifrəsiz və oxunaqlı olduğundan əmin olun.');
+    throw new Error('Fayl modeli tərəfindən oxunub analiz edilə bilmədi. Şəkil/sənədin aydın olduğundan əmin olun.');
   }
 
   public async transcribeAudio(
@@ -906,30 +1091,49 @@ Cavabı Azərbaycan dilində aşağıdakı formatda səlis və dolğun hazırla:
     const client = this.ai || this.initClient();
     if (!client) throw new Error('GEMINI_API_KEY mövcud deyil.');
 
-    try {
-      const base64Audio = audioBuffer.toString('base64');
-      const response = await client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: base64Audio
-              }
-            },
-            {
-              text: 'Bu səsli mesajı Azərbaycan dilində tam dəqiq və səlis şəkildə mətnə çevir.'
-            }
-          ]
-        }
-      });
+    const base64Audio = audioBuffer.toString('base64');
+    const audioModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-flash-latest']
+      .filter(m => !this.isModelCoolingDown(m));
+    const finalAudioModels = audioModels.length > 0 ? audioModels : ['gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
-      return response.text?.trim() || '';
-    } catch (err: any) {
-      storage.addLog('error', `Audio transkripsiya xətası: ${err?.message || err}`);
-      throw err;
+    let lastErr: any = null;
+    for (const modelName of finalAudioModels) {
+      try {
+        const response = await this.withTimeout(
+          client.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType,
+                    data: base64Audio
+                  }
+                },
+                {
+                  text: 'Bu səsli mesajı Azərbaycan dilində tam dəqiq və səlis şəkildə mətnə çevir.'
+                }
+              ]
+            }
+          }),
+          22000,
+          `Audio (${modelName})`
+        );
+
+        const text = response.text?.trim() || '';
+        if (text) {
+          this.clearModelCooldown(modelName);
+          return text;
+        }
+      } catch (err: any) {
+        lastErr = err;
+        const msg = err?.message || String(err);
+        this.markModelError(modelName, msg);
+        storage.addLog('error', `Audio transkripsiya (${modelName}) xətası: ${msg}`);
+      }
     }
+
+    throw lastErr || new Error('Səsli mesaj mətnə çevrilə bilmədi.');
   }
 }
 

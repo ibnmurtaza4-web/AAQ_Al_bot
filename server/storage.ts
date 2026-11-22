@@ -9,6 +9,7 @@ export interface TelegramGroup {
   joinedAt: string;
   lastActive: string;
   messageCount: number;
+  aiAlwaysActive?: boolean;
 }
 
 export interface TelegramUser {
@@ -110,20 +111,20 @@ export interface ModelDefinition {
 
 export const AVAILABLE_MODELS: ModelDefinition[] = [
   {
-    id: 'gemini-3.8-flash',
-    alias: 'Gemini 3.8 Flash',
-    name: '🔵 Gemini 3.8 Flash ⚡ (Ən Son Nəsil)',
-    description: 'Ən yeni bilik bazası, real vaxt təqvim/axtarış anlayışı və sürətli reaksiya',
-    speed: 'Ultra Sürətli (~0.3s)',
+    id: 'gemini-3.1-flash-lite',
+    alias: 'Gemini 3.1 Flash Lite',
+    name: '🟢 Gemini 3.1 Flash Lite 🚀 (İldırım & Stabil)',
+    description: 'Operativ reaksiya, minimum gecikmə və kəsintisiz yüksək sürətli Google Flash modeli',
+    speed: 'İldırım Sürəti (~0.3s)',
     provider: 'gemini',
     isDefault: true
   },
   {
-    id: 'gemini-2.5-flash',
-    alias: 'Gemini 2.5 Flash',
-    name: '🔵 Gemini 2.5 Flash ⚡ (Yüksək Sabitlik)',
-    description: 'Yüklənmələrə qarşı ən stabil, etibarlı və səlis Google Flash modeli',
-    speed: 'Sürətli (~0.3s)',
+    id: 'gemini-3.8-flash',
+    alias: 'Gemini 3.8 Flash',
+    name: '🔵 Gemini 3.8 Flash ⚡ (Ən Son Nəsil)',
+    description: 'Ən yeni bilik bazası, real vaxt təqvim/axtarış anlayışı və dərin reaksiya',
+    speed: 'Ultra Sürətli (~0.4s)',
     provider: 'gemini'
   },
   {
@@ -135,51 +136,43 @@ export const AVAILABLE_MODELS: ModelDefinition[] = [
     provider: 'gemini'
   },
   {
-    id: 'gemini-3.1-flash-lite',
-    alias: 'Gemini 3.1 Flash Lite',
-    name: '🟢 Gemini 3.1 Flash Lite 🚀',
-    description: 'Operativ reaksiya, minimum gecikmə və kəsintisiz iş',
-    speed: 'İldırım Sürəti (~0.2s)',
-    provider: 'gemini'
-  },
-  {
     id: 'gemini-flash-latest',
     alias: 'Gemini Flash Latest',
     name: '🟡 Gemini Flash Latest 💡',
     description: 'Daim yenilənən sabit Google Flash modeli',
-    speed: 'Sürətli (~0.3s)',
+    speed: 'Sürətli (~0.4s)',
     provider: 'gemini'
   },
   {
-    id: 'deepseek/deepseek-r1:free',
-    alias: 'DeepSeek R1',
-    name: '🟣 DeepSeek R1 🧠 (Dərin Mühakimə)',
-    description: 'Mürəkkəb riyazi, məntiqi və elmi tədqiqat sualları üçün dərin analitik model',
+    id: 'openrouter/free',
+    alias: 'OpenRouter Smart Auto',
+    name: '🟣 OpenRouter Smart Auto 🧠 (Ağıllı Seçim)',
+    description: 'Hər sorğu üçün OpenRouter şəbəkəsində aktiv olan ən güclü və sürətli modeli avtomatik seçir',
+    speed: 'Adaptiv (~0.8s)',
+    provider: 'openrouter'
+  },
+  {
+    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+    alias: 'Nemotron 3 Ultra 550B',
+    name: '🟣 Nemotron 3 Ultra 550B 🌌 (Dərin Analiz)',
+    description: '550B parametrli yüksək məntiq, elmi təhlil və 1M kontekst pəncərəli model',
     speed: 'Analitik (~1.2s)',
     provider: 'openrouter'
   },
   {
-    id: 'deepseek/deepseek-chat:free',
-    alias: 'DeepSeek V3',
-    name: '🟣 DeepSeek V3 🌌 (Akademik Analiz)',
-    description: 'Geniş erudisiya, yüksək ədəbi ifadə və proqramlaşdırma qabiliyyəti',
+    id: 'google/gemma-4-31b-it:free',
+    alias: 'Gemma 4 31B',
+    name: '🔵 Gemma 4 31B 🏛️ (Google Open)',
+    description: 'Google-un ən yeni nəsil 31B açıq arxitekturalı akademik və çoxdilli modeli',
     speed: 'Sürətli (~0.7s)',
     provider: 'openrouter'
   },
   {
-    id: 'meta-llama/llama-3.3-70b-instruct:free',
-    alias: 'Llama 3.3 70B',
-    name: '🟣 Llama 3.3 70B 🏛️ (Meta AI)',
-    description: '70 milyard parametrli güclü çoxdilli akademik və ümumi bilik modeli',
-    speed: 'Sürətli (~0.6s)',
-    provider: 'openrouter'
-  },
-  {
-    id: 'qwen/qwen-2.5-72b-instruct:free',
-    alias: 'Qwen 2.5 72B',
-    name: '🟠 Qwen 2.5 72B 📜 (Alibaba Cloud)',
-    description: 'Dəqiq mətn analizi, məntiqi nəticə və çoxdilli tərcümə imkanları',
-    speed: 'Sürətli (~0.6s)',
+    id: 'nvidia/nemotron-3.5-lightning:free',
+    alias: 'Nemotron 3.5 Lightning',
+    name: '🟠 Nemotron 3.5 Lightning ⚡ (Sürətli)',
+    description: 'Qrup dialoqları, tərcümə və sürətli sual-cavab üçün optimallaşdırılmış model',
+    speed: 'Sürətli (~0.5s)',
     provider: 'openrouter'
   },
   {
@@ -248,7 +241,7 @@ const DEFAULT_CONFIG: BotConfig = {
   officialChannel: OFFICIAL_CHANNEL_URL,
   adminSecretKey: process.env.ADMIN_SECRET_KEY || 'admin_secret_key',
   adminIds: [],
-  model: 'gemini-3.8-flash',
+  model: 'gemini-3.1-flash-lite',
   temperature: 0.5,
   systemPrompt: `Sən "AAQ - Ahl Al Qalam" (AAG Əhl-ül Qələm) elmi-maarif birliyinin rəsmi akademik köməkçisisən. Rəsmi kanal: https://t.me/AAQ_Offical.
 
@@ -282,6 +275,7 @@ export class StorageService {
   private pendingContacts: Map<number, boolean> = new Map();
   private relayedMessages: Map<number, number> = new Map(); // adminMessageId -> userChatId
   private chatHistories: Map<number, ChatMessage[]> = new Map();
+  private groupMembers: Map<number, Map<number, { id: number; first_name?: string; username?: string }>> = new Map();
   private logs: ActivityLog[] = [];
   private broadcasts: BroadcastRecord[] = [];
   private spamRateTracker: Map<number, number[]> = new Map();
@@ -534,12 +528,49 @@ export class StorageService {
         memberCount: groupData.memberCount,
         joinedAt: now,
         lastActive: now,
-        messageCount: 1
+        messageCount: 1,
+        aiAlwaysActive: false
       };
       this.groups.set(groupData.id, newGroup);
       this.saveToDisk();
       return newGroup;
     }
+  }
+
+  public getGroup(chatId: number): TelegramGroup | undefined {
+    return this.groups.get(chatId);
+  }
+
+  public setGroupAiAlwaysActive(chatId: number, active: boolean) {
+    const existing = this.groups.get(chatId);
+    if (existing) {
+      existing.aiAlwaysActive = active;
+      this.groups.set(chatId, existing);
+      this.saveToDisk();
+    }
+  }
+
+  public isGroupAiAlwaysActive(chatId: number): boolean {
+    return this.groups.get(chatId)?.aiAlwaysActive === true;
+  }
+
+  public recordGroupMember(chatId: number, user: { id?: number; first_name?: string; username?: string; is_bot?: boolean }) {
+    if (!chatId || !user?.id || user.is_bot) return;
+    let map = this.groupMembers.get(chatId);
+    if (!map) {
+      map = new Map();
+      this.groupMembers.set(chatId, map);
+    }
+    map.set(user.id, {
+      id: user.id,
+      first_name: user.first_name,
+      username: user.username
+    });
+  }
+
+  public getGroupMembers(chatId: number): Array<{ id: number; first_name?: string; username?: string }> {
+    const map = this.groupMembers.get(chatId);
+    return map ? Array.from(map.values()) : [];
   }
 
   public getUser(id: number): TelegramUser | undefined {
